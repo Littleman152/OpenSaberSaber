@@ -1,5 +1,5 @@
 # Open Saber Sharp VR
-This is a fork of [Open Saber Plus by arpruss](https://github.com/arpruss/OpenSaberPlus) ported to Godot 4.7 and OpenXR (WIP)
+This is a fork of [Open Saber Plus by arpruss](https://github.com/arpruss/OpenSaberPlus) (Original [Beep Saber by NeoSpark314](https://github.com/NeoSpark314/BeepSaber))ported to Godot 4.7 and OpenXR (WIP)
 (The OQ Toolkit is only partially ported/patched for it to work on Godot 4 with OpenXR, most features that are not used in this project will not work)
 
 This fork tries to improve the experience even more by adding noodle and mapping extensions, chroma, practice mode, better scoring and many more (this is just whats added right now at the time of 14.11.26 21:10)
