@@ -31,3 +31,4 @@ func spawn(info: BombInfo, current_beat: float) -> void:
 	var anim_speed := Map.current_difficulty.note_jump_movement_speed / 9.0
 	anim.speed_scale = maxf(min_speed, anim_speed)
 	anim.play(&"Spawn")
+	($Area3D/CollisionShape3D as CollisionShape3D).disabled = not info.interactable or info.fake
