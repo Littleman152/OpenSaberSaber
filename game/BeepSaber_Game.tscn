@@ -21,6 +21,7 @@
 [ext_resource type="PackedScene" uid="uid://biylg2wsontn3" path="res://game/settings_Panel.tscn" id="19"]
 [ext_resource type="PackedScene" uid="uid://383dbnh6gxd3" path="res://game/ui/BeatSaverPanel/BeatSaverPanel.tscn" id="20"]
 [ext_resource type="PackedScene" uid="uid://i5nhm2p2kqay" path="res://game/EndScore.tscn" id="20_fgfws"]
+[ext_resource type="PackedScene" uid="uid://mk0mmmvgvev2" path="res://game/Practice_Panel.tscn" id="20_y3btp"]
 [ext_resource type="PackedScene" uid="uid://spe4kya7ntv8" path="res://OQ_Toolkit/OQ_UI2D/OQ_UI2DKeyboard.tscn" id="21"]
 [ext_resource type="PackedScene" uid="uid://dmuvh1rllcn3e" path="res://game/Points_label_driver.tscn" id="22"]
 [ext_resource type="PackedScene" uid="uid://cpwxp083qm1jq" path="res://game/HighscorePanel.tscn" id="23"]
@@ -97,7 +98,7 @@ material = SubResource("StandardMaterial3D_qk53l")
 size = Vector2(0.75, 0.854)
 orientation = 2
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_rsu5u"]
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_y3btp"]
 resource_local_to_scene = true
 render_priority = 0
 shader = ExtResource("14_155do")
@@ -223,7 +224,7 @@ skeleton = NodePath("")
 
 [node name="Percent_Indicator" parent="." unique_id=1987737042 instance=ExtResource("16")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.5, 1, -2.5)
-material_override = SubResource("ShaderMaterial_rsu5u")
+material_override = SubResource("ShaderMaterial_y3btp")
 mesh = SubResource("QuadMesh_02xdc")
 
 [node name="EndScore" parent="." unique_id=675269165 instance=ExtResource("20_fgfws")]
@@ -235,6 +236,12 @@ transform = Transform3D(1.86849, 0, 0, 0, 1.86849, 0, 0, 0, 1.86849, 0, 1.43532,
 visible = false
 
 [node name="Pause_Panel" parent="PauseMenu_canvas" unique_id=1084204812 instance=ExtResource("18")]
+
+[node name="Practice_canvas" parent="." unique_id=649157754 instance=ExtResource("3")]
+transform = Transform3D(1.86849, 0, 0, 0, 1.86849, 0, 0, 0, 1.86849, 0, 1.43532, -0.756856)
+visible = false
+
+[node name="Practice_Panel" parent="Practice_canvas" unique_id=1271901066 instance=ExtResource("20_y3btp")]
 
 [node name="Pause_countdown" parent="." unique_id=459181070 instance=ExtResource("2")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.49382, -0.649511)

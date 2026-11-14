@@ -29,8 +29,12 @@ var last_dt := 0.0
 
 var history := Array()
 const history_size := 300
-const preswing_time := 200
-const followthrough_time := 200
+const preswing_time := 450
+const followthrough_time := 300
+# a cut slower than this (m/s, tip speed) is ignored instead of counting as a hit
+const MIN_CUT_SPEED := 1.5
+# how far (degrees) the swing may curl back before pre/post swing stops counting
+const REVERSE_TOLERANCE := 10.0
 var history_tail := history_size - 1
 
 # entry: [time,position,pointing,preswing_angle,accuracy]
@@ -145,30 +149,39 @@ func add_chain_head_score(position: Vector3, lane_rotation: float, accuracy: flo
 	Scoreboard.add_swing_score(position, lane_rotation, accuracy, preswing, 0.)
 	
 func get_preswing_angle(time: int, pointing: Vector3) -> float:
-	if history[history_tail].size() == 0:
-		return 0.
-	var start_time := time - preswing_time
-	var i := (history_tail - 1 + history_size) % history_size
-	var smallest_dot_product := 1.
-	while i != history_tail and history[i].size() > 0 and history[i][0] >= start_time:
-		var dot := pointing.dot(history[i][1])
-		if dot < smallest_dot_product:
-			smallest_dot_product = dot
+	# walk back through the history; stop when the swing reverses or the window ends
+	var best := 0.0
+	var i := history_tail
+	for _n in history_size:
 		i = (i - 1 + history_size) % history_size
-	return 180. / PI * acos(smallest_dot_product)
-	
-func get_followthrough_angle(time: int, pointing: Vector3) -> float:
-	if history[history_tail].size() == 0:
-		return 0.
-	var smallest_dot_product := pointing.dot(history[history_tail][1])
-	var i := (history_tail - 1 + history_size) % history_size
-	while i != history_tail and history[i].size() > 0 and history[i][0] > time:
-		var dot := pointing.dot(history[i][1])
-		if dot < smallest_dot_product:
-			smallest_dot_product = dot
+		if i >= history.size() or history[i].size() == 0:
+			break
+		if history[i][0] < time - preswing_time:
+			break
+		var angle := rad_to_deg(pointing.angle_to(history[i][1] as Vector3))
+		if angle + REVERSE_TOLERANCE < best:
+			break # swing reversed
+		best = maxf(best, angle)
+	return best
+
+func get_followthrough_angle(cut_time: int, pointing: Vector3) -> float:
+	# collect samples taken after the cut (newest first), then walk them oldest to newest
+	var samples: Array = []
+	var i := history_tail
+	for _n in history_size:
+		if i >= history.size() or history[i].size() == 0 or history[i][0] <= cut_time:
+			break
+		samples.append(history[i][1])
 		i = (i - 1 + history_size) % history_size
-	return 180. / PI * acos(smallest_dot_product)
-	
+	samples.reverse()
+	var best := 0.0
+	for p in samples:
+		var angle := rad_to_deg(pointing.angle_to(p as Vector3))
+		if angle + REVERSE_TOLERANCE < best:
+			break # swing reversed
+		best = maxf(best, angle)
+	return best
+
 func _update_score(score_entry) -> void:
 	var position := score_entry[1] as Vector3
 	var lane_rotation := score_entry[2] as float
@@ -226,6 +239,11 @@ func _handle_area_collided(area: Area3D) -> void:
 	if not cut_object is Cuttable: return
 	var note := cut_object as Cuttable
 	
+	# ignore touches that are too slow to be a real cut
+	var controller_speed: Vector3 = (saber_end - saber_end_past) / last_dt
+	if controller_speed.length() < MIN_CUT_SPEED:
+		return
+	
 	var time_offset: float = (
 		(note.beat/Map.current_info.beats_per_minute * 60.0)-
 		song_player_ref.get_playback_position()
@@ -234,7 +252,6 @@ func _handle_area_collided(area: Area3D) -> void:
 	controller.simple_rumble(0.75, 0.1)
 	
 	var o := controller.global_transform.origin
-	var controller_speed: Vector3 = (saber_end - saber_end_past) / last_dt
 	const BEAT_DISTANCE := 4.0
 	var cutplane := Plane(o, saber_end, saber_end_past + Vector3(0, 0, BEAT_DISTANCE * Map.current_info.beats_per_minute * last_dt / 30)) # Account for relative position to track speed
 	note.cut(self, controller_speed, cutplane, controller)

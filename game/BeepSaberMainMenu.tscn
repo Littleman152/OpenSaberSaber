@@ -1,9 +1,9 @@
 [gd_scene format=3 uid="uid://glii0poslcve"]
 
-[ext_resource type="Theme" uid="uid://dvcjel72een6o" path="res://u/assets/OQ_Toolkit/OQ_UI2D/theme/oq_ui2d_standard.theme" id="1"]
+[ext_resource type="Theme" uid="uid://dvcjel72een6o" path="res://OQ_Toolkit/OQ_UI2D/theme/oq_ui2d_standard.theme" id="1"]
 [ext_resource type="FontFile" uid="uid://cdsnr8tscm8y6" path="res://OQ_Toolkit/OQ_UI2D/theme/Roboto-Medium.ttf" id="2"]
-[ext_resource type="Script" uid="uid://cbe53qn50sjl7" path="res://game/BeepSaberMainMenu.gd" id="3"]
-[ext_resource type="Texture2D" uid="uid://cviyxvrpvyr0g" path="res://u/assets/game/data/beepsaber_logo.png" id="3_wpmn0"]
+[ext_resource type="Script" uid="uid://dn4qgb0h6uj8u" path="res://game/BeepSaberMainMenu.gd" id="3"]
+[ext_resource type="Texture2D" uid="uid://cviyxvrpvyr0g" path="res://game/data/beepsaber_logo.png" id="3_wpmn0"]
 [ext_resource type="FontFile" uid="uid://01k27lk2a4bw" path="res://OQ_Toolkit/OQ_UI2D/theme/RobotoMono-Medium.ttf" id="5"]
 [ext_resource type="PackedScene" uid="uid://dtipmx5ep1dkk" path="res://game/vr_slider.tscn" id="6"]
 [ext_resource type="FontVariation" uid="uid://ckoe517v8p3qp" path="res://OQ_Toolkit/OQ_UI2D/theme/oq_ui2d_standard_font.tres" id="7"]
@@ -144,8 +144,10 @@ default_font_size = 20
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_qax3j"]
 
 [node name="BeepSaberMainMenu" type="Panel" unique_id=1329467298]
-offset_right = 1408.0
-offset_bottom = 640.0
+offset_left = -9.0
+offset_top = -4.0
+offset_right = 1399.0
+offset_bottom = 636.0
 theme = ExtResource("1")
 theme_override_styles/panel = SubResource("1")
 script = ExtResource("3")
@@ -241,26 +243,11 @@ popup/item_2/id = 2
 popup/item_3/text = "Stretch 175%"
 popup/item_3/id = 3
 
-[node name="Speed" type="OptionButton" parent="Modifiers3/Flip" unique_id=1987793820]
+[node name="Handedness" type="OptionButton" parent="Modifiers3/Flip" unique_id=1664220508]
 layout_mode = 0
-offset_top = 27.0
-offset_right = 127.0
-offset_bottom = 54.0
-item_count = 4
-popup/item_0/text = "Stretch 100%"
-popup/item_0/id = 0
-popup/item_1/text = "Stretch 125%"
-popup/item_1/id = 1
-popup/item_2/text = "Stretch 150%"
-popup/item_2/id = 2
-popup/item_3/text = "Stretch 175%"
-popup/item_3/id = 3
-
-[node name="Handedness" type="OptionButton" parent="Modifiers3/Flip/Speed" unique_id=1664220508]
-layout_mode = 0
-offset_top = 27.0
-offset_right = 127.0
-offset_bottom = 54.0
+offset_top = 24.0
+offset_right = 135.0
+offset_bottom = 51.0
 item_count = 4
 popup/item_0/text = "Stretch 100%"
 popup/item_0/id = 0
@@ -281,6 +268,17 @@ theme_override_styles/normal = SubResource("4")
 theme_override_styles/pressed = SubResource("3")
 theme_override_styles/hover = SubResource("2")
 text = "Play!"
+
+[node name="Practice_Button" type="Button" parent="." unique_id=1731050215]
+layout_mode = 0
+offset_left = 864.0
+offset_top = 576.0
+offset_right = 1250.0
+offset_bottom = 624.0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/pressed = SubResource("3")
+theme_override_styles/hover = SubResource("2")
+text = "Practice"
 
 [node name="Delete_Button" type="Button" parent="." unique_id=1222545396]
 layout_mode = 0
@@ -408,23 +406,6 @@ theme_override_styles/pressed = SubResource("3")
 theme_override_styles/hover = SubResource("2")
 text = "Refresh Songs/Playlists"
 
-[node name="upload_url" type="Label" parent="." unique_id=1379669192]
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -545.0
-offset_top = -68.0
-offset_right = -150.0
-offset_bottom = -16.0
-grow_horizontal = 0
-grow_vertical = 0
-theme_override_font_sizes/font_size = 21
-text = "Manually Upload Custom Songs: 
-asdasdasd"
-
 [node name="song_prev" type="AudioStreamPlayer" parent="." unique_id=1250199406]
 volume_db = -60.0
 bus = &"MusicPreview"
@@ -513,9 +494,9 @@ text = "X"
 [connection signal="item_selected" from="Modifiers2/Claws/Size" to="." method="_on_size_item_selected"]
 [connection signal="item_selected" from="Modifiers2/Claws/Size/Width" to="." method="_on_width_item_selected"]
 [connection signal="item_selected" from="Modifiers3/Flip" to="." method="_on_flip_item_selected"]
-[connection signal="item_selected" from="Modifiers3/Flip/Speed" to="." method="_on_speed_item_selected"]
-[connection signal="item_selected" from="Modifiers3/Flip/Speed/Handedness" to="." method="_on_handedness_item_selected"]
+[connection signal="item_selected" from="Modifiers3/Flip/Handedness" to="." method="_on_handedness_item_selected"]
 [connection signal="pressed" from="Play_Button" to="." method="_on_Play_Button_pressed"]
+[connection signal="pressed" from="Practice_Button" to="." method="_on_Practice_Button_pressed"]
 [connection signal="button_up" from="Delete_Button" to="." method="_on_Delete_Button_button_up"]
 [connection signal="pressed" from="Exit_Button" to="." method="_on_Exit_Button_pressed"]
 [connection signal="pressed" from="Settings_Button" to="." method="_on_Settings_Button_pressed"]

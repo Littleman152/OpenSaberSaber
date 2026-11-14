@@ -1,0 +1,218 @@
+[gd_scene format=3 uid="uid://mk0mmmvgvev2"]
+
+[ext_resource type="FontFile" uid="uid://cdsnr8tscm8y6" path="res://OQ_Toolkit/OQ_UI2D/theme/Roboto-Medium.ttf" id="1"]
+[ext_resource type="FontFile" uid="uid://01k27lk2a4bw" path="res://OQ_Toolkit/OQ_UI2D/theme/RobotoMono-Medium.ttf" id="2"]
+[ext_resource type="Script" uid="uid://iqm3ch4go4b" path="res://game/Practice_Panel.gd" id="3"]
+
+[sub_resource type="StyleBoxFlat" id="1"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 8
+border_width_top = 8
+border_width_right = 8
+border_width_bottom = 8
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="FontFile" id="7"]
+fallbacks = Array[Font]([ExtResource("2")])
+cache/0/variation_coordinates = {}
+cache/0/face_index = 0
+cache/0/embolden = 0.0
+cache/0/transform = Transform2D(1, 0, 0, 1, 0, 0)
+cache/0/spacing_top = 0
+cache/0/spacing_bottom = 0
+cache/0/spacing_space = 0
+cache/0/spacing_glyph = 0
+cache/0/baseline_offset = 0.0
+cache/0/16/0/ascent = 0.0
+cache/0/16/0/descent = 0.0
+cache/0/16/0/underline_position = 0.0
+cache/0/16/0/underline_thickness = 0.0
+cache/0/16/0/scale = 1.0
+
+[sub_resource type="Theme" id="8"]
+default_font = SubResource("7")
+
+[sub_resource type="StyleBoxFlat" id="9"]
+content_margin_top = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0.270588, 0.270588, 0.270588, 1)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="StyleBoxFlat" id="10"]
+bg_color = Color(1, 1, 1, 1)
+
+[sub_resource type="FontFile" id="2"]
+fallbacks = Array[Font]([ExtResource("1")])
+cache/0/variation_coordinates = {}
+cache/0/face_index = 0
+cache/0/embolden = 0.0
+cache/0/transform = Transform2D(1, 0, 0, 1, 0, 0)
+cache/0/spacing_top = 0
+cache/0/spacing_bottom = 0
+cache/0/spacing_space = 0
+cache/0/spacing_glyph = 0
+cache/0/baseline_offset = 0.0
+cache/0/16/0/ascent = 0.0
+cache/0/16/0/descent = 0.0
+cache/0/16/0/underline_position = 0.0
+cache/0/16/0/underline_thickness = 0.0
+cache/0/16/0/scale = 1.0
+
+[sub_resource type="Theme" id="3"]
+default_font = SubResource("2")
+
+[sub_resource type="StyleBoxFlat" id="6"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="StyleBoxFlat" id="5"]
+bg_color = Color(0.270588, 0.270588, 0.270588, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(1, 1, 1, 1)
+
+[sub_resource type="StyleBoxFlat" id="4"]
+bg_color = Color(0.14902, 0.14902, 0.14902, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(1, 1, 1, 1)
+
+[node name="Practice_Panel" type="Panel" unique_id=1271901066]
+offset_right = 640.0
+offset_bottom = 576.0
+theme_override_styles/panel = SubResource("1")
+script = ExtResource("3")
+
+[node name="title" type="Label" parent="." unique_id=769856722]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 624.0
+offset_bottom = 59.0
+theme = SubResource("8")
+text = "Practice"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="song" type="Label" parent="." unique_id=1597886683]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 64.0
+offset_right = 624.0
+offset_bottom = 128.0
+theme = SubResource("8")
+text = "Song"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="speed_label" type="Label" parent="." unique_id=1131326418]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 140.0
+offset_right = 624.0
+offset_bottom = 180.0
+theme = SubResource("8")
+text = "Speed 100%"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="speed_slider" type="HSlider" parent="." unique_id=2129687057]
+layout_mode = 0
+offset_left = 48.0
+offset_top = 184.0
+offset_right = 592.0
+offset_bottom = 216.0
+theme_override_styles/slider = SubResource("9")
+theme_override_styles/grabber_area = SubResource("10")
+theme_override_styles/grabber_area_highlight = SubResource("10")
+min_value = 50.0
+max_value = 200.0
+step = 5.0
+value = 100.0
+
+[node name="start_label" type="Label" parent="." unique_id=2052914140]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 236.0
+offset_right = 624.0
+offset_bottom = 276.0
+theme = SubResource("8")
+text = "Start at 0:00"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="start_slider" type="HSlider" parent="." unique_id=1194017719]
+layout_mode = 0
+offset_left = 48.0
+offset_top = 280.0
+offset_right = 592.0
+offset_bottom = 312.0
+theme_override_styles/slider = SubResource("9")
+theme_override_styles/grabber_area = SubResource("10")
+theme_override_styles/grabber_area_highlight = SubResource("10")
+max_value = 600.0
+
+[node name="minus" type="Button" parent="." unique_id=1616951689]
+layout_mode = 0
+offset_left = 48.0
+offset_top = 328.0
+offset_right = 248.0
+offset_bottom = 376.0
+theme = SubResource("3")
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/pressed = SubResource("5")
+theme_override_styles/hover = SubResource("4")
+text = "-10 s"
+
+[node name="plus" type="Button" parent="." unique_id=274273325]
+layout_mode = 0
+offset_left = 392.0
+offset_top = 328.0
+offset_right = 592.0
+offset_bottom = 376.0
+theme = SubResource("3")
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/pressed = SubResource("5")
+theme_override_styles/hover = SubResource("4")
+text = "+10 s"
+
+[node name="start" type="Button" parent="." unique_id=1132475196]
+layout_mode = 0
+offset_left = 216.0
+offset_top = 400.0
+offset_right = 424.0
+offset_bottom = 464.0
+theme = SubResource("3")
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/pressed = SubResource("5")
+theme_override_styles/hover = SubResource("4")
+text = "Start"
+
+[node name="back" type="Button" parent="." unique_id=2090258661]
+layout_mode = 0
+offset_left = 216.0
+offset_top = 480.0
+offset_right = 424.0
+offset_bottom = 544.0
+theme = SubResource("3")
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/pressed = SubResource("5")
+theme_override_styles/hover = SubResource("4")
+text = "Back"
+
+[connection signal="button_up" from="minus" to="." method="_on_minus_button_up"]
+[connection signal="button_up" from="plus" to="." method="_on_plus_button_up"]
+[connection signal="button_up" from="start" to="." method="_on_start_button_up"]
+[connection signal="button_up" from="back" to="." method="_on_back_button_up"]

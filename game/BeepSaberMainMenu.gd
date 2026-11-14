@@ -10,6 +10,8 @@ class_name MainMenu
 signal difficulty_changed(map_info: MapInfo, diff_rank: int)
 # emitted when the settings button is pressed
 signal settings_requested()
+# emitted when the Practice button is pressed
+signal practice_requested(info: MapInfo, difficulty: DifficultyInfo)
 signal start_map(info: MapInfo, difficulty: DifficultyInfo, health: bool)
 
 var _cover_texture_create_sw := StopwatchFactory.create("cover_texture_create",10,true)
@@ -32,11 +34,10 @@ const FAVORITE_MASK := 0x4000000000000000
 @onready var bombs_control := $Modifiers/Health/Bombs as CheckButton
 @onready var arrows_control := $Modifiers/Health/Bombs/Arrows as CheckButton
 @onready var flip_control := $Modifiers3/Flip as OptionButton
-@onready var handedness_control := $Modifiers3/Flip/Speed/Handedness as OptionButton
+@onready var handedness_control := $Modifiers3/Flip/Handedness as OptionButton
 @onready var claws_control := $Modifiers2/Claws as CheckButton
 @onready var size_control := $Modifiers2/Claws/Size as OptionButton
 @onready var width_control := $Modifiers2/Claws/Size/Width as OptionButton
-@onready var speed_control := $Modifiers3/Flip/Speed as OptionButton
 @onready var favorite_button := $Favorite_Button as Button
 @onready var reset_button := $Reset_Button as Button
 
@@ -390,7 +391,6 @@ func _update_mod_controls() -> void:
 	_drop_down(handedness_control, Constants.HANDEDNESSES, Settings.handedness, 0)
 	_drop_down(width_control, Constants.WIDTHS, Settings.width, 0)
 	_drop_down(size_control, Constants.SIZES, Settings.block_size, 1)
-	_drop_down(speed_control, Constants.SPEEDS, Settings.music_speed, 1)
 	
 	bombs_control.button_pressed = Settings.bombs_enabled
 	claws_control.button_pressed = Settings.claws
@@ -426,12 +426,7 @@ func _ready() -> void:
 	playlist_selector.select(1)
 	playlist_selector.item_selected.emit(1)
 	
-	if song_uploader_ref and song_uploader_ref.active:
-		$upload_url.text = "Manually Upload Songs/Backgrounds: \n%s"%[
-			song_uploader_ref.get_server_url()
-		]
-	else:
-		$upload_url.text = ""
+	# the upload url label now lives on the settings page, BeepSaber_Game.gd fills it in
 	
 	$version.text = beepsaber_game.version
 	if OS.get_name() == &"Web":
@@ -452,6 +447,16 @@ func _on_Play_Button_pressed() -> void:
 		song_preview.stop()
 		Settings.save()
 		_load_map_and_start(map)
+
+func _on_Practice_Button_pressed() -> void:
+	if current_selected >= 0:
+		var map := _currently_selected_songlist_ref[current_selected]
+		if map.is_empty() or map.difficulty_beatmaps.size() == 0:
+			return
+		Settings.last_map = map.filepath
+		song_preview.stop()
+		Settings.save()
+		practice_requested.emit(map, map.difficulty_beatmaps[_map_difficulty])
 
 func _on_Exit_Button_pressed() -> void:
 	get_tree().quit()
@@ -628,10 +633,6 @@ func _on_width_item_selected(index: int) -> void:
 
 func _on_size_item_selected(index: int) -> void:
 	Settings.block_size = Constants.SIZES[index][0]
-	update_view()
-
-func _on_speed_item_selected(index: int) -> void:
-	Settings.music_speed = Constants.SPEEDS[index][0]
 	update_view()
 
 func _on_flip_item_selected(index: int) -> void:

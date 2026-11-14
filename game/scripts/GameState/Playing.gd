@@ -55,6 +55,7 @@ func _physics_process(game: BeepSaber_Game) -> void:
 
 var bomb_template := load("res://game/Bomb/Bomb.tscn") as PackedScene
 var wall_template := load("res://game/Wall/Wall.tscn") as PackedScene
+var wall_batch: WallBatch   # draws all uninteractable (Noodle) walls with one draw call
 var arc_template := load("res://game/Arc/Arc.tscn") as PackedScene
 const BEATS_AHEAD := 4.0
 
@@ -88,9 +89,17 @@ func _process_map(game: BeepSaber_Game) -> void:
 	
 	# spawn obstacles (walls)
 	while not Map.obstacle_stack.is_empty() and Map.obstacle_stack[-1].beat <= look_ahead:
-		var wall := wall_template.instantiate() as Wall
-		wall.spawn(Map.obstacle_stack.pop_back() as ObstacleInfo, current_beat)
-		game.track.add_child(wall)
+		var wall_info := Map.obstacle_stack.pop_back() as ObstacleInfo
+		if wall_info.interactable:
+			# normal wall: pooled node with collision
+			var wall := Wall.acquire()
+			if wall == null:
+				wall = wall_template.instantiate() as Wall
+				game.track.add_child(wall)
+			wall.spawn(wall_info, current_beat)
+		else:
+			# fake / uninteractable wall: no node, no collision, drawn by the batch
+			_get_wall_batch(game).add_wall(wall_info, current_beat)
 	
 	while not Map.arc_stack.is_empty() and Map.arc_stack[-1].head_beat <= look_ahead:
 		var arc := arc_template.instantiate() as Arc
@@ -128,3 +137,10 @@ func _process_map(game: BeepSaber_Game) -> void:
 	
 	while not Map.event_stack.is_empty() and Map.event_stack[-1].beat <= current_beat:
 		game.event_driver.process_event(Map.event_stack.pop_back() as EventInfo)
+
+func _get_wall_batch(game: BeepSaber_Game) -> WallBatch:
+	if wall_batch == null or not is_instance_valid(wall_batch):
+		wall_batch = WallBatch.new()
+		wall_batch.setup()
+		game.track.add_child(wall_batch)
+	return wall_batch

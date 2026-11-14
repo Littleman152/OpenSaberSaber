@@ -51,13 +51,32 @@ static func unzip(zip_file: String, destination: String) -> void:
 	if zreader.open(zip_file) != OK:
 		vr.log_warning("unable to open zip file %s" % zip_file)
 		return
+	@warning_ignore("return_value_discarded")
+	DirAccess.make_dir_recursive_absolute(destination)
 	for file in zreader.get_files():
-		if not Settings.not_music_dl or not ends_in(file, [".ogg", ".egg", ".mp3"]):
-			var buffer := zreader.read_file(file)
-			if buffer:
-				var filea := FileAccess.open(destination+"/"+file, FileAccess.WRITE)
-				filea.store_buffer(buffer)
-				filea.close()
+		# folder entries have nothing to extract
+		if file.ends_with("/"):
+			continue
+		if Settings.not_music_dl and ends_in(file, [".ogg", ".egg", ".mp3"]):
+			continue
+		# never write outside of the destination folder
+		if file.begins_with("/") or ".." in file.split("/"):
+			vr.log_warning("skipping unsafe path in zip: %s" % file)
+			continue
+		var buffer := zreader.read_file(file)
+		if buffer.is_empty():
+			continue
+		var path := destination + "/" + file
+		# files inside a subfolder of the zip need that folder to exist first
+		@warning_ignore("return_value_discarded")
+		DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+		var filea := FileAccess.open(path, FileAccess.WRITE)
+		if filea == null:
+			# do not crash the download, just tell which file failed and why
+			vr.log_warning("unable to write %s (error %d)" % [path, FileAccess.get_open_error()])
+			continue
+		filea.store_buffer(buffer)
+		filea.close()
 	@warning_ignore("return_value_discarded")
 	zreader.close()
 	
@@ -174,7 +193,7 @@ static func update_bus_speed(bus_name: String) -> void:
 			if speed == 1.:
 				AudioServer.remove_bus_effect(bus, i)
 			else:
-				(effect as AudioEffectPitchShift).pitch_scale = 1./Settings.music_speed
+				(effect as AudioEffectPitchShift).pitch_scale = 1./speed
 			return
 	if speed == 1.:
 		return

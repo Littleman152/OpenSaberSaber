@@ -71,7 +71,7 @@ func add_points(position: Vector3, _rotation: float, amount: int, comment: Strin
 	score_changed.emit()
 	# track accuracy percent
 	var good = Constants.SWING_GOOD_SCORE if Settings.swing_scoring else Constants.OPENSABER_GOOD_SCORE
-	var normalized_points := clampf(float(points)/good, 0.0, 1.0)
+	var normalized_points := clampf(float(amount)/good, 0.0, 1.0)
 	right_notes += normalized_points
 	wrong_notes += 1.0-normalized_points
 	

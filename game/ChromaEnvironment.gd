@@ -1,0 +1,248 @@
+extends RefCounted
+class_name ChromaEnvironment
+# Chroma "environment enhancement": reads the map's _environment list (v2) / environment list (v3)
+# and applies it to the nodes under the event driver's "Level" node.
+#
+# Supported per entry: _id + _lookupMethod (Exact, Contains, StartsWith, EndsWith, Regex),
+# _active, _duplicate, _position, _localPosition, _rotation, _localRotation, _scale, _track,
+# and _geometry (Cube, Sphere, Capsule, Cylinder, Plane, Quad with a simple color).
+# Not supported: _components (lights), _lightID, _follow, animation of tracks (needs track events).
+#
+# Beat Saber's object names (Pillar, Mirror, clouds...) don't exist in this game's environment,
+# so unmatched ids fall back to the ALIASES table below. Edit it to point more ids at your nodes.
+
+const MAX_DUPLICATES := 64     # cap so a map can't spawn thousands of nodes on Quest
+const MAX_GEOMETRY := 256
+
+# lowercase fragment of a Beat Saber id -> node paths under the Level node
+const ALIASES := {
+	"glowline": ["floor/line0", "floor/line1", "floor/line2", "floor/line3", "floor/line4"],
+	"laser": ["DiagonalLasers", "SquareLasers", "LeftWavingLasers", "RightWavingLasers"],
+	"ring": ["rings"],
+	"tracklight": ["TrackLights"],
+}
+
+var tracks := {}                   # track name -> Array of nodes (for future track events)
+
+var _root: Node3D
+var _nodes: Array[Node3D] = []
+var _names := PackedStringArray()  # dotted path of every node under _root, e.g. "SquareLasers.Bar7"
+var _match_cache := {}
+var _regex_cache := {}
+var _saved: Array = []             # [node, visible, transform] for nodes we changed
+var _saved_set := {}
+var _spawned: Array[Node] = []     # duplicates and geometry we created
+
+func _init(root: Node3D) -> void:
+	_root = root
+
+static func _g(d: Dictionary, key: String) -> Variant:
+	return d.get("_" + key, d.get(key, null))
+
+static func _has3(v: Variant) -> bool:
+	return v is Array and (v as Array).size() >= 3
+
+static func _v3(v: Variant) -> Vector3:
+	return Vector3(float(v[0]), float(v[1]), float(v[2]))
+
+# Unity euler degrees (ZXY order) -> game basis (z axis is mirrored, so x/y rotations flip sign)
+static func _euler_basis(deg: Vector3) -> Basis:
+	return Basis.from_euler(Vector3(deg_to_rad(-deg.x), deg_to_rad(-deg.y), deg_to_rad(deg.z)), EULER_ORDER_YXZ)
+
+func apply(map_data: Dictionary) -> void:
+	if _root == null:
+		return
+	var custom: Variant = map_data.get("_customData", map_data.get("customData", null))
+	if not custom is Dictionary:
+		return
+	var env: Variant = (custom as Dictionary).get("_environment", (custom as Dictionary).get("environment", null))
+	if not env is Array or (env as Array).is_empty():
+		return
+	_index_nodes()
+	for entry: Variant in env:
+		if entry is Dictionary:
+			_apply_entry(entry as Dictionary)
+
+# Undo everything: delete duplicates/geometry and put changed nodes back as they were.
+func restore() -> void:
+	for n: Node in _spawned:
+		if is_instance_valid(n):
+			if n.get_parent() != null:
+				n.get_parent().remove_child(n)
+			n.queue_free()
+	_spawned.clear()
+	for s: Array in _saved:
+		var n := s[0] as Node3D
+		if is_instance_valid(n):
+			n.visible = s[1]
+			n.transform = s[2]
+	_saved.clear()
+	_saved_set.clear()
+	tracks.clear()
+	_match_cache.clear()
+
+func _index_nodes() -> void:
+	_nodes.clear()
+	_names = PackedStringArray()
+	_match_cache.clear()
+	_collect(_root, "")
+
+func _collect(parent: Node, prefix: String) -> void:
+	for c: Node in parent.get_children():
+		if c is Node3D:
+			var nm := prefix + String(c.name)
+			_nodes.append(c as Node3D)
+			_names.append(nm)
+			_collect(c, nm + ".")
+
+func _lookup(id: String, method: String) -> Array:
+	var key := method + "|" + id
+	if _match_cache.has(key):
+		return _match_cache[key]
+	var rx: RegEx = null
+	if method == "Regex":
+		if _regex_cache.has(id):
+			rx = _regex_cache[id]
+		else:
+			rx = RegEx.new()
+			if rx.compile(id) != OK:
+				rx = null
+			_regex_cache[id] = rx
+	var result: Array = []
+	for i in _nodes.size():
+		var nm := _names[i]
+		var hit := false
+		match method:
+			"Exact":
+				hit = nm == id or String(_nodes[i].name) == id
+			"Contains":
+				hit = nm.contains(id)
+			"StartsWith":
+				hit = nm.begins_with(id)
+			"EndsWith":
+				hit = nm.ends_with(id)
+			"Regex":
+				hit = rx != null and rx.search(nm) != null
+		if hit:
+			result.append(_nodes[i])
+	if result.is_empty():
+		result = _alias_lookup(id)
+	_match_cache[key] = result
+	return result
+
+func _alias_lookup(id: String) -> Array:
+	var result: Array = []
+	var low := id.to_lower()
+	for key: String in ALIASES:
+		if low.contains(key):
+			for path: String in ALIASES[key]:
+				var n := _root.get_node_or_null(path)
+				if n is Node3D:
+					result.append(n)
+			break
+	return result
+
+func _apply_entry(e: Dictionary) -> void:
+	var geometry: Variant = _g(e, "geometry")
+	if geometry is Dictionary:
+		_make_geometry(e, geometry as Dictionary)
+		return
+	var id: Variant = _g(e, "id")
+	if not id is String:
+		return
+	var method_v: Variant = _g(e, "lookupMethod")
+	var method := String(method_v) if method_v is String else "Exact"
+	var targets := _lookup(String(id), method)
+	if targets.is_empty():
+		return
+	var dup_v: Variant = _g(e, "duplicate")
+	var dup_count := int(dup_v) if (dup_v is float or dup_v is int) else 0
+	if dup_count > 0:
+		# the transform in this entry applies to the copies, the originals stay as they are
+		var copies: Array = []
+		for n: Node3D in targets:
+			for k in dup_count:
+				if _spawned.size() >= MAX_DUPLICATES:
+					break
+				var d := n.duplicate() as Node3D
+				n.get_parent().add_child(d)
+				_spawned.append(d)
+				copies.append(d)
+		targets = copies
+	for n: Node3D in targets:
+		_apply_transform(n, e)
+
+func _save(n: Node3D) -> void:
+	if _saved_set.has(n):
+		return
+	_saved_set[n] = true
+	_saved.append([n, n.visible, n.transform])
+
+func _apply_transform(n: Node3D, e: Dictionary) -> void:
+	if not _spawned.has(n):
+		_save(n)
+	var active: Variant = _g(e, "active")
+	if active is bool:
+		n.visible = active
+	var unit := Vector3(Settings.LANE_DISTANCE_X, Constants.LANE_DISTANCE_Y, Settings.LANE_DISTANCE_X)
+	var scale_v: Variant = _g(e, "scale")
+	if _has3(scale_v):
+		n.scale = n.scale * _v3(scale_v)
+	var rot_v: Variant = _g(e, "rotation")
+	if _has3(rot_v):
+		n.global_basis = _euler_basis(_v3(rot_v)) * Basis.from_scale(n.scale)
+	var lrot_v: Variant = _g(e, "localRotation")
+	if _has3(lrot_v):
+		n.basis = _euler_basis(_v3(lrot_v)) * Basis.from_scale(n.scale)
+	var pos_v: Variant = _g(e, "position")
+	if _has3(pos_v):
+		var p := _v3(pos_v)
+		n.global_position = Vector3(p.x * unit.x, p.y * unit.y, -p.z * unit.z)
+	var lpos_v: Variant = _g(e, "localPosition")
+	if _has3(lpos_v):
+		var lp := _v3(lpos_v)
+		n.position = Vector3(lp.x * unit.x, lp.y * unit.y, -lp.z * unit.z)
+	var track_v: Variant = _g(e, "track")
+	if track_v is String:
+		if not tracks.has(track_v):
+			tracks[track_v] = []
+		(tracks[track_v] as Array).append(n)
+
+func _make_geometry(e: Dictionary, g: Dictionary) -> void:
+	if _spawned.size() >= MAX_DUPLICATES + MAX_GEOMETRY:
+		return
+	var type_v: Variant = _g(g, "type")
+	var mesh: Mesh = null
+	match String(type_v) if type_v is String else "":
+		"Cube":
+			mesh = BoxMesh.new()
+		"Sphere":
+			mesh = SphereMesh.new()
+		"Capsule":
+			mesh = CapsuleMesh.new()
+		"Cylinder":
+			mesh = CylinderMesh.new()
+		"Plane":
+			mesh = PlaneMesh.new()
+		"Quad":
+			mesh = QuadMesh.new()
+	if mesh == null:
+		return
+	var color := Color.WHITE
+	var mat_v: Variant = _g(g, "material")
+	if mat_v is Dictionary:
+		var c: Variant = _g(mat_v as Dictionary, "color")
+		if _has3(c):
+			var arr := c as Array
+			color = Color(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]) if arr.size() > 3 else 1.0)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = color
+	if color.a < 1.0:
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = material
+	_root.add_child(mi)
+	_spawned.append(mi)
+	_apply_transform(mi, e)

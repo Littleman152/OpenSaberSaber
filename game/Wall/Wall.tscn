@@ -1,13 +1,11 @@
-[gd_scene load_steps=7 format=3 uid="uid://iglrdadxsqw4"]
+[gd_scene format=3 uid="uid://iglrdadxsqw4"]
 
 [ext_resource type="Material" uid="uid://mu4iyylnwc38" path="res://game/Wall/wall_new2.material" id="1"]
-[ext_resource type="Script" path="res://game/Wall/Wall.gd" id="2"]
+[ext_resource type="Script" uid="uid://c3xsgc150rk17" path="res://game/Wall/Wall.gd" id="2"]
 
 [sub_resource type="BoxMesh" id="1"]
-resource_local_to_scene = true
 
 [sub_resource type="BoxShape3D" id="2"]
-resource_local_to_scene = true
 
 [sub_resource type="Animation" id="3"]
 tracks/0/type = "value"
@@ -25,27 +23,25 @@ tracks/0/keys = {
 
 [sub_resource type="AnimationLibrary" id="AnimationLibrary_wf5pt"]
 _data = {
-"Spawn": SubResource("3")
+&"Spawn": SubResource("3")
 }
 
-[node name="Wall" type="Node3D" groups=["wall"]]
+[node name="Wall" type="Node3D" unique_id=986033880 groups=["wall"]]
 script = ExtResource("2")
 
-[node name="WallMeshOrientation" type="Node3D" parent="."]
+[node name="WallMeshOrientation" type="Node3D" parent="." unique_id=1779924375]
 
-[node name="WallMesh" type="MeshInstance3D" parent="WallMeshOrientation"]
+[node name="WallMesh" type="MeshInstance3D" parent="WallMeshOrientation" unique_id=742108651]
 layers = 3
 material_override = ExtResource("1")
 mesh = SubResource("1")
 
-[node name="WallArea" type="Area3D" parent="WallMeshOrientation" groups=["wall"]]
+[node name="WallArea" type="Area3D" parent="WallMeshOrientation" unique_id=134197236 groups=["wall"]]
 collision_mask = 20
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="WallMeshOrientation/WallArea"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallMeshOrientation/WallArea" unique_id=1510800571]
 shape = SubResource("2")
 
-[node name="AnimationPlayer" type="AnimationPlayer" parent="."]
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=1463239192]
 root_node = NodePath("../WallMeshOrientation")
-libraries = {
-"": SubResource("AnimationLibrary_wf5pt")
-}
+libraries/ = SubResource("AnimationLibrary_wf5pt")

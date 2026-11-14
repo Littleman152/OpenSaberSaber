@@ -20,6 +20,7 @@ func ax_pressed() -> bool:
 func ax_just_pressed() -> bool:
 	return ax and not ax_last_frame
 
+
 func ax_just_released() -> bool:
 	return ax_last_frame and not ax
 

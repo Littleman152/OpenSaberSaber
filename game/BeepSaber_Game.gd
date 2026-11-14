@@ -12,6 +12,7 @@ var gamestate_mapselection := GameStateMapSelection.new()
 var gamestate_newhighscore := GameStateNewHighScore.new()
 var gamestate_paused := GameStatePaused.new()
 var gamestate_playing := GameStatePlaying.new()
+var gamestate_practice := GameStatePractice.new()
 var gamestate_settings := GameStateSettings.new()
 var gamestate: GameState = gamestate_bootup
 var current_health := Constants.HEALTH_START
@@ -28,6 +29,8 @@ var current_health := Constants.HEALTH_START
 
 @onready var main_menu := $MainMenu_OQ_UI2DCanvas as OQ_UI2DCanvas
 @onready var pause_menu := $PauseMenu_canvas as OQ_UI2DCanvas
+# the practice menu, see the setup steps. the game still runs without it.
+@onready var practice_canvas := get_node_or_null("Practice_canvas") as OQ_UI2DCanvas
 @onready var pause_countdown := $Pause_countdown as OQ_UI2DLabel
 @onready var settings_canvas := $Settings_canvas as OQ_UI2DCanvas
 @onready var settings_panel := settings_canvas.ui_control as SettingsPanel
@@ -50,6 +53,7 @@ var current_health := Constants.HEALTH_START
 @onready var cube_template := preload("res://game/BeepCube/BeepCube.tscn").instantiate() as BeepCube
 
 @onready var track := $Track as Node3D
+@onready var chroma_env := ChromaEnvironment.new(event_driver.get_node("Level") as Node3D)
 @onready var standing_ground := $StandingGround as Floor
 
 @onready var song_player := $SongPlayer as AudioStreamPlayer
@@ -74,6 +78,15 @@ var _in_wall := false
 #prevents the song for starting from the start when pausing and unpausing
 var pause_position := 0.0
 
+# --- practice mode ---
+# seconds of music you hear before the first note you will actually play
+const PRACTICE_LEAD_IN := 3.0
+var practice_active := false
+var practice_start_seconds := 0.0
+# where song_player starts playing; Playing.gd uses it for the restart sync check
+var audio_start_position := 0.0
+var _saved_music_speed := -1
+
 func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	var map_data := Utils.binary_to_json(Utils.read_binary_file(info.filepath, map_difficulty.beatmap_filename))
 	
@@ -81,6 +94,17 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 		vr.log_error("Could not read map data from " + info.filepath + "/" + map_difficulty.beatmap_filename)
 	if not Map.load_beatmap(info, map_difficulty, map_data):
 		return
+	
+	# Chroma environment enhancement (duplicate / move / delete environment objects)
+	chroma_env.restore()
+	chroma_env.apply(map_data)
+	
+	audio_start_position = 0.0
+	if practice_active:
+		# the first note you play lands at practice_start_seconds, the music starts a bit earlier
+		var start_beat := practice_start_seconds * Map.current_info.beats_per_minute / 60.
+		Map.skip_to_beat(start_beat)
+		audio_start_position = maxf(0.0, practice_start_seconds - PRACTICE_LEAD_IN)
 		
 	event_driver.set_background_texture()
 	
@@ -116,7 +140,7 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 			song_player.stream = wav
 	
 	_audio_synced_after_restart = false
-	song_player.play(0.0)
+	song_player.play(audio_start_position)
 	song_player.volume_db = 0.0
 	song_player.pitch_scale = Settings.music_speed / 100.
 	_in_wall = false
@@ -132,6 +156,37 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	_clear_track()
 	_transition_game_state(gamestate_playing)
 
+# speed_percent: 50 to 200, start_seconds: position in the song (first note you will play)
+func start_practice(info: MapInfo, map_difficulty: DifficultyInfo, speed_percent: int, start_seconds: float) -> void:
+	if _saved_music_speed < 0:
+		_saved_music_speed = Settings.music_speed
+	Settings.music_speed = speed_percent
+	practice_active = true
+	practice_start_seconds = start_seconds
+	start_map(info, map_difficulty)
+
+# restores the normal settings, called when going back to the song selection
+func _end_practice() -> void:
+	practice_active = false
+	if _saved_music_speed >= 0:
+		Settings.music_speed = _saved_music_speed
+		_saved_music_speed = -1
+
+var _practice_info: MapInfo
+var _practice_difficulty: DifficultyInfo
+
+func _on_practice_requested(info: MapInfo, difficulty: DifficultyInfo) -> void:
+	_practice_info = info
+	_practice_difficulty = difficulty
+	(practice_canvas.ui_control as PracticePanel).setup(info, difficulty)
+	_transition_game_state(gamestate_practice)
+
+func _on_practice_start(speed_percent: int, start_seconds: float) -> void:
+	start_practice(_practice_info, _practice_difficulty, speed_percent, start_seconds)
+
+func _on_practice_back() -> void:
+	_transition_game_state(gamestate_mapselection)
+
 func update_health(delta: float) -> void:
 	if Settings.health_mode:
 		current_health += delta
@@ -144,6 +199,11 @@ func update_health(delta: float) -> void:
 # This function will transitioning the game from it's current state into
 # the provided 'next_state'.
 func _transition_game_state(next_state: GameState) -> void:
+	if next_state == gamestate_mapselection:
+		_end_practice()
+	# the practice menu is only shown by its own state
+	if practice_canvas:
+		practice_canvas._hide()
 	gamestate = next_state
 	gamestate._ready(self)
 
@@ -241,6 +301,22 @@ func _ready() -> void:
 	UI_AudioEngine.attach_children(highscore_keyboard)
 	UI_AudioEngine.attach_children(online_search_keyboard)
 	
+	# the upload url label was moved from the main menu to the settings page
+	var upload_label := settings_panel.find_child("upload_url", true, false) as Label
+	if upload_label:
+		if menu.song_uploader_ref and menu.song_uploader_ref.active:
+			upload_label.text = "Manually Upload Songs/Backgrounds: \n%s" % [
+				menu.song_uploader_ref.get_server_url()
+			]
+		else:
+			upload_label.text = ""
+	
+	if practice_canvas:
+		var practice_panel := practice_canvas.ui_control as PracticePanel
+		practice_panel.start_pressed.connect(_on_practice_start)
+		practice_panel.back_pressed.connect(_on_practice_back)
+		menu.practice_requested.connect(_on_practice_requested)
+	
 	_transition_game_state(gamestate_mapselection)
 	
 	@warning_ignore("return_value_discarded")
@@ -319,6 +395,7 @@ func update_right_color(color: Color) -> void:
 	standing_ground.update_right_color(color)
 
 func _clear_track() -> void:
+	chroma_env.restore()
 	for c in track.get_children():
 		if c.has_method("clear_from_track"):
 			c.clear_from_track()
@@ -373,11 +450,15 @@ func get_current_time() -> float:
 # the high score
 func _on_song_ended() -> void:
 	song_player.stop()
-	PlayCount.increment_play_count(Map.current_info,Map.current_difficulty.difficulty_rank)
+	if not practice_active:
+		PlayCount.increment_play_count(Map.current_info,Map.current_difficulty.difficulty_rank)
 	
 	var new_record := false
 	var highscore := Highscores.get_highscore(Map.current_info,Map.current_difficulty.difficulty_rank)
-	if highscore == -1:
+	if practice_active:
+		# practice runs never count for the highscores
+		highscore = Scoreboard.points
+	elif highscore == -1:
 		# no highscores exist yet
 		highscore = Scoreboard.points
 	elif Scoreboard.points > highscore:
@@ -403,7 +484,7 @@ func _on_song_ended() -> void:
 		new_record
 	)
 	
-	if Highscores.is_new_highscore(Map.current_info,Map.current_difficulty.difficulty_rank,Scoreboard.points):
+	if not practice_active and Highscores.is_new_highscore(Map.current_info,Map.current_difficulty.difficulty_rank,Scoreboard.points):
 		_transition_game_state(gamestate_newhighscore)
 	else:
 		_transition_game_state(gamestate_mapcomplete)

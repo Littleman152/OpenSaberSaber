@@ -15,6 +15,16 @@ static var arc_stack: Array[ArcInfo]
 static var chain_stack: Array[ChainInfo]
 static var event_stack: Array[EventInfo]
 
+# MapInfo objects are reused every time a map is played or restarted, so the speed
+# multiplier must always be applied to the original BPM, never to the already scaled one.
+static var _original_bpm := {} # MapInfo instance id -> unscaled beats_per_minute
+
+static func _apply_music_speed(info: MapInfo) -> void:
+	var id := info.get_instance_id()
+	if not _original_bpm.has(id):
+		_original_bpm[id] = info.beats_per_minute
+	info.beats_per_minute = (_original_bpm[id] as float) * Settings.music_speed / 100.
+
 static var _color_left: Color
 static var _color_right: Color
 static var color_left: Color :
@@ -363,6 +373,9 @@ static func load_arc_stack_v4(arc_data: Array, meta: Array, meta_notes: Array) -
 				if abs(ROTATE_ALL) > Constants.ROTATION_EPS_DEGREES:
 					a3["hr"] = ROTATE_ALL
 					a3["tr"] = ROTATE_ALL
+				else:
+					a3["hr"] = Utils.get_float(a, "hr", 0.)
+					a3["tr"] = Utils.get_float(a, "tr", 0.)
 				arc_stack[last_index - i] = ArcInfo.new_v3(a3)
 			i += 1
 	var midpoint := arc_data.size() >> 1
@@ -397,6 +410,8 @@ static func load_chain_stack_v4(chain_data: Array, meta: Array, meta_notes: Arra
 					c3["y"] = Utils.get_float(m, "y", 0)
 					c3["c"] = Utils.get_float(m, "c", 0)
 					c3["d"] = Utils.get_float(m, "d", 0)
+				c3["hr"] = Utils.get_float(c, "hr", 0.)
+				c3["tr"] = Utils.get_float(c, "tr", 0.)
 				chain_stack[last_index - i] = ChainInfo.new_v3(c3)
 			i += 1
 	var midpoint := chain_data.size() >> 1
@@ -452,6 +467,20 @@ static func get_last_beat() -> void:
 		if bomb.beat > current_info.last_beat:
 			current_info.last_beat = bomb.beat
 	
+# practice mode: drop everything that happens before start_beat, so the track starts
+# at that point. events (lighting) are kept, they all get applied on the first frame.
+static func skip_to_beat(start_beat: float) -> void:
+	while not note_stack.is_empty() and note_stack[-1].beat < start_beat:
+		note_stack.pop_back()
+	while not bomb_stack.is_empty() and bomb_stack[-1].beat < start_beat:
+		bomb_stack.pop_back()
+	while not obstacle_stack.is_empty() and obstacle_stack[-1].beat < start_beat:
+		obstacle_stack.pop_back()
+	while not arc_stack.is_empty() and arc_stack[-1].head_beat < start_beat:
+		arc_stack.pop_back()
+	while not chain_stack.is_empty() and chain_stack[-1].head_beat < start_beat:
+		chain_stack.pop_back()
+
 static func compare_times(a: Array, b: Array):
 	return a[0] < b[0]
 			
@@ -515,7 +544,7 @@ static func load_beatmap(info: MapInfo, difficulty: DifficultyInfo, map_data: Di
 		Utils.custom_thread_call(arc_thread_0, load_arc_stack_v2, [Utils.get_array(map_data, "_sliders", []), rotations])
 		chain_stack.clear()
 		current_info = info
-		current_info.beats_per_minute *= Settings.music_speed / 100.
+		_apply_music_speed(info)
 		current_difficulty = difficulty
 		one_saber = difficulty.characteristic == "OneSaber"
 		Map.set_colors_from_custom_data()
@@ -570,11 +599,13 @@ static func load_beatmap(info: MapInfo, difficulty: DifficultyInfo, map_data: Di
 					rotations
 					])
 			if v4:
-				pass #TODO
+				# TODO: v4 lighting lives in the separate lightshow file and isn't loaded yet.
+				# clear the events of the previously played map so they don't play on this one
+				event_stack.clear()
 			else:
 				Utils.custom_thread_call(event_thread_0, load_event_stack_v3, [Utils.get_array(map_data, "basicBeatmapEvents", [])])
 			current_info = info
-			current_info.beats_per_minute *= Settings.music_speed / 100.
+			_apply_music_speed(info)
 			current_difficulty = difficulty
 			one_saber = difficulty.characteristic == "OneSaber"
 			Map.set_colors_from_custom_data()
