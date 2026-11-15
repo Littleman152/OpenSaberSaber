@@ -17,6 +17,30 @@ class Track extends RefCounted:
 	var easings := PackedInt32Array()
 
 const E_SPLINE := 1
+
+# named point definitions of the current map (_pointDefinitions), so animations can refer to them by name
+static var point_definitions := {}
+
+static func set_point_definitions(map_data: Dictionary) -> void:
+	point_definitions = {}
+	var custom: Variant = map_data.get("_customData", map_data.get("customData", null))
+	if not custom is Dictionary:
+		return
+	var defs: Variant = (custom as Dictionary).get("_pointDefinitions", (custom as Dictionary).get("pointDefinitions", null))
+	if not defs is Array:
+		return
+	for d: Variant in defs:
+		if d is Dictionary:
+			var nm: Variant = (d as Dictionary).get("_name", (d as Dictionary).get("name", null))
+			var pts: Variant = (d as Dictionary).get("_points", (d as Dictionary).get("points", null))
+			if nm is String and pts is Array:
+				point_definitions[nm] = pts
+
+# a string is looked up in the point definitions, anything else is returned unchanged
+static func resolve(raw: Variant) -> Variant:
+	if raw is String and point_definitions.has(raw):
+		return point_definitions[raw]
+	return raw
 # id = family * 10 + kind; family 1..4 = Quad..Quint, 5 = Sine, 6 = Expo, 7 = Elastic, 8 = Back
 # kind 0 = in, 1 = out, 2 = inOut
 const EASE_IDS := {
@@ -33,6 +57,7 @@ const EASE_IDS := {
 # comps = number of value components (3 for vectors, 4 for colors, 1 for floats).
 # Returns null for anything that isn't keyframe data (for example point definition names).
 static func parse(raw: Variant, comps: int) -> Track:
+	raw = resolve(raw)
 	if not raw is Array or (raw as Array).is_empty():
 		return null
 	var arr := raw as Array

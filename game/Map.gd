@@ -8,6 +8,15 @@ class_name Map
 static var current_info: MapInfo
 static var current_difficulty: DifficultyInfo
 
+# --- NJS debug (v4 only). shown in the in-game debug label (Settings.show_debug_info) ---
+# set to true to also print the NJS of every spawned note to the output
+const DEBUG_PRINT_NOTE_NJS := false
+static var is_v4 := false
+# v4.1 NJS events, each {beat, diff, easing}: diff is relative to the base NJS from Info.dat
+static var njs_events: Array[Dictionary] = []
+static var last_note_njs := 0.0
+static var last_note_beat := 0.0
+
 static var note_stack: Array[ColorNoteInfo]
 static var bomb_stack: Array[BombInfo]
 static var obstacle_stack: Array[ObstacleInfo]
@@ -24,6 +33,112 @@ static func _apply_music_speed(info: MapInfo) -> void:
 	if not _original_bpm.has(id):
 		_original_bpm[id] = info.beats_per_minute
 	info.beats_per_minute = (_original_bpm[id] as float) * Settings.music_speed / 100.
+
+# v4.1 variable NJS (VNJS): the NJS eases from the previous event's value to this event's
+# value between the two beats. p = 1 means "use the previous event's values".
+static func load_njs_events(map_data: Dictionary, v4: bool) -> void:
+	njs_events.clear()
+	last_note_njs = 0.0
+	last_note_beat = 0.0
+	if not v4:
+		return
+	var events := Utils.get_array(map_data, "njsEvents", [])
+	var meta := Utils.get_array(map_data, "njsEventData", [])
+	var prev_diff := 0.0
+	var prev_easing := 0
+	for raw_event in events:
+		var ev := raw_event as Dictionary
+		var idx := int(Utils.get_float(ev, "i", 0.0))
+		if idx < 0 or idx >= meta.size():
+			continue
+		var data := meta[idx] as Dictionary
+		var extend := int(Utils.get_float(data, "p", 0.0)) == 1
+		var diff := prev_diff if extend else Utils.get_float(data, "d", 0.0)
+		var easing := prev_easing if extend else int(Utils.get_float(data, "e", 0.0))
+		njs_events.append({"beat": Utils.get_float(ev, "b", 0.0), "diff": diff, "easing": easing})
+		prev_diff = diff
+		prev_easing = easing
+	njs_events.sort_custom(func(a: Dictionary, c: Dictionary) -> bool: return (a["beat"] as float) < (c["beat"] as float))
+
+# my reading of the docs: before the first event the NJS eases from the base NJS (beat 0),
+# after the last event it stays at the last value
+static func get_njs_at_beat(beat: float) -> float:
+	var base := current_difficulty.note_jump_movement_speed as float
+	var prev_beat := 0.0
+	var prev_diff := 0.0
+	for ev in njs_events:
+		var event_beat := ev["beat"] as float
+		if beat < event_beat:
+			var span := event_beat - prev_beat
+			var t := 1.0 if span <= 0.0 else (beat - prev_beat) / span
+			return base + lerpf(prev_diff, ev["diff"] as float, _ease(ev["easing"] as int, t))
+		prev_beat = event_beat
+		prev_diff = ev["diff"] as float
+	return base + prev_diff
+
+# the NJS an object at this beat should use: the base NJS, or the v4 VNJS value
+# when the map has NJS events. notes, bombs, chain links and walls all use this.
+static func get_object_njs(beat: float) -> float:
+	if is_v4 and not njs_events.is_empty():
+		return get_njs_at_beat(beat)
+	return current_difficulty.note_jump_movement_speed as float
+
+# set to false to go back to every object using the same speed (the old behavior)
+const VNJS_SPEED_SCALING := true
+
+# how fast an object at this beat moves compared to the map's base NJS (1.0 = normal).
+# the object's speed AND its spawn distance are both multiplied by this, so it still
+# lands exactly on its beat: faster NJS = further away and faster, slower NJS = closer and slower.
+static func get_speed_scale(beat: float) -> float:
+	if not VNJS_SPEED_SCALING or not is_v4 or njs_events.is_empty():
+		return 1.0
+	var base := current_difficulty.note_jump_movement_speed as float
+	if base <= 0.0:
+		return 1.0
+	return clampf(get_njs_at_beat(beat) / base, 0.25, 4.0)
+
+# called for every spawned note
+static func note_njs_debug(note_info: ColorNoteInfo) -> void:
+	last_note_beat = note_info.beat
+	last_note_njs = get_njs_at_beat(note_info.beat)
+	if DEBUG_PRINT_NOTE_NJS:
+		print("v4 note beat %.3f  NJS %.2f (base %.2f)  speed x%.2f" % [last_note_beat, last_note_njs, current_difficulty.note_jump_movement_speed, get_speed_scale(last_note_beat)])
+
+# easings from the format docs. back, elastic, bounce and the BeatSaber ones are
+# approximated as linear, this is only for the debug numbers
+static func _ease(id: int, t: float) -> float:
+	t = clampf(t, 0.0, 1.0)
+	match id:
+		-1: return 0.0 if t < 1.0 else 1.0
+		0: return t
+		1: return t * t
+		2: return 1.0 - (1.0 - t) * (1.0 - t)
+		3: return 2.0 * t * t if t < 0.5 else 1.0 - pow(-2.0 * t + 2.0, 2.0) / 2.0
+		4: return 1.0 - cos(t * PI / 2.0)
+		5: return sin(t * PI / 2.0)
+		6: return -(cos(PI * t) - 1.0) / 2.0
+		7: return t * t * t
+		8: return 1.0 - pow(1.0 - t, 3.0)
+		9: return 4.0 * t * t * t if t < 0.5 else 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0
+		10: return pow(t, 4.0)
+		11: return 1.0 - pow(1.0 - t, 4.0)
+		12: return 8.0 * pow(t, 4.0) if t < 0.5 else 1.0 - pow(-2.0 * t + 2.0, 4.0) / 2.0
+		13: return pow(t, 5.0)
+		14: return 1.0 - pow(1.0 - t, 5.0)
+		15: return 16.0 * pow(t, 5.0) if t < 0.5 else 1.0 - pow(-2.0 * t + 2.0, 5.0) / 2.0
+		16: return 0.0 if t == 0.0 else pow(2.0, 10.0 * t - 10.0)
+		17: return 1.0 if t == 1.0 else 1.0 - pow(2.0, -10.0 * t)
+		18:
+			if t == 0.0 or t == 1.0:
+				return t
+			return pow(2.0, 20.0 * t - 10.0) / 2.0 if t < 0.5 else (2.0 - pow(2.0, -20.0 * t + 10.0)) / 2.0
+		19: return 1.0 - sqrt(1.0 - t * t)
+		20: return sqrt(1.0 - (t - 1.0) * (t - 1.0))
+		21:
+			if t < 0.5:
+				return (1.0 - sqrt(1.0 - pow(2.0 * t, 2.0))) / 2.0
+			return (sqrt(1.0 - pow(-2.0 * t + 2.0, 2.0)) + 1.0) / 2.0
+		_: return t
 
 static var _color_left: Color
 static var _color_right: Color
@@ -454,6 +569,28 @@ static func load_event_stack_v3(event_data: Array) -> void:
 	load_range.bind(midpoint, event_data.size()).call()
 	Utils.custom_thread_wait_to_finish(event_thread_1)
 	
+# v4 basic events are a beat + index into a data list (type, value, float value).
+# this converts them to the v3 format that EventInfo already understands.
+# eventBoxGroups (the newer lighting system) are not supported.
+static func load_event_stack_v4(event_data: Array, meta: Array) -> void:
+	var converted: Array = []
+	for raw_event in event_data:
+		if not raw_event is Dictionary:
+			continue
+		var ev := raw_event as Dictionary
+		var idx := int(Utils.get_float(ev, "i", 0.0))
+		if idx < 0 or idx >= meta.size() or not meta[idx] is Dictionary:
+			continue
+		var data := meta[idx] as Dictionary
+		converted.append({
+			"b": Utils.get_float(ev, "b", 0.0),
+			"et": Utils.get_float(data, "t", 0.0),
+			"i": Utils.get_float(data, "i", 0.0),
+			"f": Utils.get_float(data, "f", 1.0)
+		})
+	converted.sort_custom(func(a: Dictionary, c: Dictionary) -> bool: return (a["b"] as float) < (c["b"] as float))
+	load_event_stack_v3(converted)
+
 static func get_last_beat() -> void:
 	current_info.last_beat = 0.
 	for note_info in note_stack:
@@ -536,6 +673,9 @@ static func load_beatmap(info: MapInfo, difficulty: DifficultyInfo, map_data: Di
 		else:
 			map_data["version"] = info.version
 	
+	njs_events.clear()
+	is_v4 = false
+	
 	if map_data.has("_version"):
 		var rotations := get_rotations_v2(Utils.get_array(map_data, "_events", []))
 		Utils.custom_thread_call(note_thread_0, load_note_stack_v2, [Utils.get_array(map_data, "_notes", []), rotations])
@@ -558,6 +698,8 @@ static func load_beatmap(info: MapInfo, difficulty: DifficultyInfo, map_data: Di
 		var version := Utils.get_str(map_data, "version", "")
 		if version.begins_with("3.") or version.begins_with("4."):
 			var v4 := version.begins_with("4.")
+			is_v4 = v4
+			load_njs_events(map_data, v4)
 			var rotations : Array
 			if v4:
 				rotations = [] if abs(ROTATE_ALL) <= Constants.ROTATION_EPS_DEGREES else [[0.,ROTATE_ALL]]
@@ -599,9 +741,13 @@ static func load_beatmap(info: MapInfo, difficulty: DifficultyInfo, map_data: Di
 					rotations
 					])
 			if v4:
-				# TODO: v4 lighting lives in the separate lightshow file and isn't loaded yet.
-				# clear the events of the previously played map so they don't play on this one
-				event_stack.clear()
+				# v4 lighting is in a separate lightshow file, BeepSaber_Game.start_map() puts it into
+				# map_data["lightshow"]. without one this clears the events of the previous map
+				var lightshow := Utils.get_dict(map_data, "lightshow", {})
+				Utils.custom_thread_call(event_thread_0, load_event_stack_v4,
+					[Utils.get_array(lightshow, "basicEvents", []),
+					Utils.get_array(lightshow, "basicEventsData", [])
+					])
 			else:
 				Utils.custom_thread_call(event_thread_0, load_event_stack_v3, [Utils.get_array(map_data, "basicBeatmapEvents", [])])
 			current_info = info

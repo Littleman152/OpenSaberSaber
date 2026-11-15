@@ -23,7 +23,9 @@ func spawn(info: ArcInfo, current_beat: float, _activator_cube: BeepCube = null)
 		queue_free()
 		return
 	
-	speed = Constants.BEAT_DISTANCE * Map.current_info.beats_per_minute * 0.016666666666666667
+	# the whole arc uses the speed of its head note (v4 VNJS, 1.0 on every other map)
+	var speed_scale := Map.get_speed_scale(info.head_beat)
+	speed = Constants.BEAT_DISTANCE * Map.current_info.beats_per_minute * 0.016666666666666667 * speed_scale
 	var path := $Path3D as Path3D
 	visual = $Path3D/Visual
 	visual.material_override = right_material if arc_info.color == 1 else left_material
@@ -33,12 +35,20 @@ func spawn(info: ArcInfo, current_beat: float, _activator_cube: BeepCube = null)
 	else:
 		start_magnet()
 	
-	path.set_curve(info.curve)
-	despawn_z = Constants.MISS_Z - info.tail_pos.z - current_beat*Constants.BEAT_DISTANCE
+	var curve := info.curve
+	if absf(speed_scale - 1.0) > 0.001:
+		# stretch a copy of the curve along z, the same way the notes are
+		var z_scale := Vector3(1.0, 1.0, speed_scale)
+		curve = info.curve.duplicate() as Curve3D
+		for point_id in curve.point_count:
+			curve.set_point_position(point_id, curve.get_point_position(point_id) * z_scale)
+			curve.set_point_in(point_id, curve.get_point_in(point_id) * z_scale)
+			curve.set_point_out(point_id, curve.get_point_out(point_id) * z_scale)
+	path.set_curve(curve)
+	despawn_z = Constants.MISS_Z - speed_scale * (info.tail_pos.z + current_beat*Constants.BEAT_DISTANCE)
 	
-	path.set_curve(arc_info.curve)
 	# sets the origin of the tail at the tail point to use in the shader for a fade out effect
-	path.position =  info.tail_pos + Vector3(0,0,current_beat*Constants.BEAT_DISTANCE)
+	path.position = Vector3(info.tail_pos.x, info.tail_pos.y, speed_scale * (info.tail_pos.z + current_beat*Constants.BEAT_DISTANCE))
 	rotation.y = -arc_info.head_rotation
 
 func _on_activator_cube_cutted(correct_saber: bool) -> void:

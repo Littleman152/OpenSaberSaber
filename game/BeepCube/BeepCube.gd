@@ -25,9 +25,6 @@ var arc_head = false
 var arc_tail = false
 var chain_head = false
 var counts_for_score := true
-# how dissolved (0 to 1) fake / uninteractable notes look. Change this value to taste.
-const FLAGGED_DISSOLVE := 0.5
-
 func _ready() -> void:
 	_mat = mi.material_override as ShaderMaterial
 	_mesh = mi.mesh
@@ -103,7 +100,9 @@ func spawn(note_info: ColorNoteInfo, current_beat: float) -> void:
 	# Noodle: fake / uninteractable notes can't be cut and never count as a miss
 	counts_for_score = note_info.interactable and not note_info.fake
 	set_collision_disabled(not counts_for_score)
-	_mat.set_shader_parameter(&"dissolve", 0.0 if counts_for_score else FLAGGED_DISSOLVE)
+	# fake / uninteractable notes only show their arrow or dot
+	_mat.set_shader_parameter(&"glyph_only", not counts_for_score)
+	_mat.set_shader_parameter(&"dissolve", 0.0)
 
 # call this when clearing the track
 func clear_from_track() -> void:
@@ -132,9 +131,6 @@ func on_miss() -> void:
 	release()
 
 func set_collision_disabled(value: bool) -> void:
-	# Cuttable._physics_process re-enables collisions every frame once the note is close,
-	# so fake / uninteractable notes must stay disabled here, not just at setup
-	value = value or not counts_for_score
 	collision_big.disabled = value
 	collision_small.disabled = value
 	
@@ -158,7 +154,7 @@ func cut(saber: LightSaber, cut_speed: Vector3, cut_plane: Plane, controller: Be
 		var cut_angle_accuracy := clampf((base_cut_angle_accuracy-0.7)/0.3, 0.0, 1.0)
 		if is_dot or not Settings.arrows_enabled: #ignore angle if is a dot
 			cut_angle_accuracy = 1.0
-		var cut_distance_accuracy := clampf((0.3 - absf(cut_distance*distance_scale))/0.3, 0.0, 1.0)
+		var cut_distance_accuracy := clampf((0.1 - absf(cut_distance*distance_scale))/0.1, 0.0, 1.0)
 		var travel_distance_factor := controller.movement_aabb.get_longest_axis_size()
 		travel_distance_factor = clampf((travel_distance_factor-0.5)/0.5, 0.0, 1.0)
 		# allows a bit of save margin where the beat is considered 100% correct

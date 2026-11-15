@@ -8,6 +8,22 @@ var line_layer: float
 var width: float
 var height: float
 var rotation: = 0.
+var interactable := true
+var fake := false
+
+# ---- Noodle data (read from customData, see NoodleAnim.gd) ----
+var noodle := false            # true if the wall has any Noodle transform / color / animation
+var has_scale := false
+var nd_scale := Vector3.ONE    # in lane units
+var nd_position := Vector2.ZERO
+var nd_rotation := Vector3.ZERO        # world rotation (degrees)
+var nd_local_rotation := Vector3.ZERO  # degrees
+var nd_color := Color.WHITE
+var has_njs := false
+var nd_njs := 0.0
+var nd_offset := 0.0
+var anim := {}                 # "def_pos" "scale" "rotation" "local_rotation" "dissolve" "color" -> NoodleAnim.Track
+var tracks := PackedStringArray()
 
 @warning_ignore("shadowed_variable")
 func _init(beat: float, duration: float, line_index: float, line_layer: float, 
@@ -41,7 +57,7 @@ static func new_v2(obstacle_dict: Dictionary) -> ObstacleInfo:
 		2: # free
 			y = Utils.precise_measurement(Utils.get_float(obstacle_dict, "_lineLayer", 0))
 			h = Utils.precise_measurement(Utils.get_float(obstacle_dict, "_height", 0))
-	return ObstacleInfo.new(
+	var info := ObstacleInfo.new(
 		Utils.get_float(obstacle_dict, "_time", 0.0),
 		Utils.get_float(obstacle_dict, "_duration", 0.0),
 		Utils.precise_measurement(Utils.get_float(obstacle_dict, "_lineIndex", 0)),
@@ -50,9 +66,14 @@ static func new_v2(obstacle_dict: Dictionary) -> ObstacleInfo:
 		h,
 		Utils.get_float(obstacle_dict, "r", 0)
 	)
+	var cd := Utils.get_dict(obstacle_dict, "_customData", {})
+	info.interactable = cd.get("_interactable", true) != false
+	info.fake = cd.get("_fake", false) == true
+	_read_noodle(info, cd)
+	return info
 
 static func new_v3(obstacle_dict: Dictionary) -> ObstacleInfo:
-	return ObstacleInfo.new(
+	var info := ObstacleInfo.new(
 		Utils.get_float(obstacle_dict, "b", 0.0),
 		Utils.get_float(obstacle_dict, "d", 0.0),
 		Utils.precise_measurement(Utils.get_float(obstacle_dict, "x", 0)),
@@ -61,3 +82,62 @@ static func new_v3(obstacle_dict: Dictionary) -> ObstacleInfo:
 		Utils.precise_measurement(Utils.get_float(obstacle_dict, "h", 0)),
 		Utils.get_float(obstacle_dict, "r", 0)
 	)
+	var cd := Utils.get_dict(obstacle_dict, "customData", {})
+	info.interactable = cd.get("uninteractable", false) != true
+	info.fake = cd.get("fake", false) == true
+	_read_noodle(info, cd)
+	return info
+
+static func _vec3(v: Variant) -> Vector3:
+	if v is Array and (v as Array).size() >= 3:
+		return Vector3(float(v[0]), float(v[1]), float(v[2]))
+	return Vector3.ZERO
+
+# Reads the Noodle fields. v2 key names first, v3 names as fallback.
+static func _read_noodle(info: ObstacleInfo, cd: Dictionary) -> void:
+	var sc: Variant = cd.get("_scale", cd.get("size", null))
+	if sc is Array and (sc as Array).size() >= 3:
+		info.has_scale = true
+		info.nd_scale = _vec3(sc)
+	var pos: Variant = cd.get("_position", cd.get("coordinates", null))
+	if pos is Array and (pos as Array).size() >= 2:
+		info.nd_position = Vector2(float(pos[0]), float(pos[1]))
+	info.nd_rotation = _vec3(cd.get("_rotation", cd.get("worldRotation", null)))
+	info.nd_local_rotation = _vec3(cd.get("_localRotation", cd.get("localRotation", null)))
+	var col: Variant = cd.get("_color", cd.get("color", null))
+	var has_color := false
+	if col is Array and (col as Array).size() >= 3:
+		has_color = true
+		info.nd_color = Color(float(col[0]), float(col[1]), float(col[2]), 1.0)
+	var njs: Variant = cd.get("_noteJumpMovementSpeed", cd.get("noteJumpMovementSpeed", null))
+	if njs is float or njs is int:
+		info.has_njs = true
+		info.nd_njs = float(njs)
+		info.nd_offset = float(cd.get("_noteJumpStartBeatOffset", cd.get("noteJumpStartBeatOffset", 0.0)))
+	var raw_anim: Variant = cd.get("_animation", cd.get("animation", null))
+	if raw_anim is Dictionary:
+		var ad := raw_anim as Dictionary
+		var specs := {
+			"def_pos": ["_definitePosition", "definitePosition", 3],
+			"scale": ["_scale", "scale", 3],
+			"rotation": ["_rotation", "rotation", 3],
+			"local_rotation": ["_localRotation", "localRotation", 3],
+			"dissolve": ["_dissolve", "dissolve", 1],
+			"color": ["_color", "color", 4],
+		}
+		for key: String in specs:
+			var spec: Array = specs[key]
+			var tr := NoodleAnim.parse(ad.get(spec[0], ad.get(spec[1], null)), int(spec[2]))
+			if tr != null:
+				info.anim[key] = tr
+	# track names (v2 "_track", v3 "track"): a string or a list of strings
+	var trk: Variant = cd.get("_track", cd.get("track", null))
+	if trk is String:
+		info.tracks.append(trk)
+	elif trk is Array:
+		for tn: Variant in trk:
+			if tn is String:
+				info.tracks.append(tn)
+	info.noodle = has_color or info.has_scale or not info.anim.is_empty() \
+		or info.nd_position != Vector2.ZERO or info.nd_rotation != Vector3.ZERO \
+		or info.nd_local_rotation != Vector3.ZERO or not info.tracks.is_empty()

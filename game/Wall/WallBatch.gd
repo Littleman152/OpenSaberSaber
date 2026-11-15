@@ -38,12 +38,12 @@ var _walls: Array[W] = []
 var _speed := 0.0
 var _beat_now := 0.0
 var _beats_per_sec := 1.0
+var _dbg_frames := 0   # DEBUG, remove later
 
 func setup() -> void:
 	var unit_box := BoxMesh.new()   # default size is 1 x 1 x 1
 	_mm.transform_format = MultiMesh.TRANSFORM_3D
-	_mm.use_colors = true           # per-wall color (Chroma / _animation._color)
-	_mm.use_custom_data = true      # xyz = base wall size, w = dissolve
+	_mm.use_custom_data = true      # rgb = wall color, a = dissolve (size comes from the instance transform)
 	_mm.mesh = unit_box             # set the flags above BEFORE instance_count
 	_mm.instance_count = MAX_WALLS
 	_mm.visible_instance_count = 0
@@ -70,7 +70,7 @@ static func _euler_basis(deg: Vector3) -> Basis:
 	return Basis.from_euler(Vector3(deg_to_rad(-deg.x), deg_to_rad(-deg.y), deg_to_rad(deg.z)), EULER_ORDER_YXZ)
 
 static func _half_jump(info: ObstacleInfo, bpm: float) -> float:
-	var njs: float = info.nd_njs if info.has_njs else Map.current_difficulty.note_jump_movement_speed
+	var njs: float = info.nd_njs if info.has_njs else Map.get_object_njs(info.beat)
 	var hjd := 4.0
 	var sec_per_beat := 60.0 / bpm
 	while njs * sec_per_beat * hjd > 17.999:
@@ -128,6 +128,8 @@ func _physics_process(delta: float) -> void:
 	if Scoreboard.paused or _walls.is_empty():
 		return
 	_beat_now += delta * _beats_per_sec
+	if NoodleTracks.current != null:
+		NoodleTracks.current.begin_frame(_beat_now)
 	var step := _speed * delta
 	var i := 0
 	while i < _walls.size():
@@ -148,6 +150,14 @@ func _physics_process(delta: float) -> void:
 		_write_instance(i, w, t)
 		i += 1
 	_mm.visible_instance_count = _walls.size()
+	# DEBUG, remove later: once per second describe the first wall that has a track
+	_dbg_frames += 1
+	if _dbg_frames % 60 == 0 and NoodleTracks.current != null:
+		for dw in _walls:
+			if dw.noodle and not dw.info.tracks.is_empty():
+				var dt: float = (_beat_now - dw.start_beat) / dw.life_beats
+				print("[WALLTRACK] beat=", snappedf(_beat_now, 0.01), " walls=", _walls.size(), " wall t=", snappedf(dt, 0.001), " track chain: ", NoodleTracks.current.describe(dw.info.tracks[0]))
+				break
 
 func _write_instance(i: int, w: W, t: float) -> void:
 	var sz := w.size
@@ -155,6 +165,7 @@ func _write_instance(i: int, w: W, t: float) -> void:
 	var dissolve := 0.0
 	var b := w.lane_basis
 	var pos := w.origin
+	var parent_xf := Transform3D.IDENTITY
 
 	if not w.noodle:
 		if w.age < SPAWN_ANIM_TIME:
@@ -183,6 +194,20 @@ func _write_instance(i: int, w: W, t: float) -> void:
 		if a.has("color"):
 			var cv := NoodleAnim.sample(a["color"], t)
 			color = Color(cv.x, cv.y, cv.z, 1.0)
+		# Noodle track events: the wall's tracks add their animation on top of its own
+		var trk_pos := Vector3.ZERO
+		var trk := NoodleTracks.current
+		if trk != null and not w.info.tracks.is_empty():
+			for tname: String in w.info.tracks:
+				var ts := trk.state(tname)
+				sz *= ts.scale
+				trk_pos += ts.position
+				world_b = NoodleTracks.euler_basis(ts.rotation) * world_b
+				local_b = local_b * NoodleTracks.euler_basis(ts.local_rotation)
+				dissolve = clampf(dissolve + ts.dissolve, 0.0, 1.0)
+				if ts.has_color:
+					color = Color(color.r * ts.color.r, color.g * ts.color.g, color.b * ts.color.b, 1.0)
+			parent_xf = trk.parent_transform(w.info.tracks[0])
 		if w.has_def:
 			var pv := NoodleAnim.sample(a["def_pos"], t)
 			pos = Vector3(pv.x * unit.x, pv.y * unit.y, -pv.z * unit.z)
@@ -191,12 +216,12 @@ func _write_instance(i: int, w: W, t: float) -> void:
 			b = Basis.IDENTITY
 		else:
 			pos = w.origin + w.offset
+		pos += trk_pos
 		pos = world_b * pos            # "_rotation" turns the object around the player
 		b = world_b * b * local_b
 
-	_mm.set_instance_transform(i, Transform3D(b.scaled_local(sz), pos))
-	_mm.set_instance_color(i, color)
-	_mm.set_instance_custom_data(i, Color(w.size.x, w.size.y, w.size.z, dissolve))
+	_mm.set_instance_transform(i, parent_xf * Transform3D(b.scaled_local(sz), pos))
+	_mm.set_instance_custom_data(i, Color(color.r, color.g, color.b, dissolve))
 
 # swap-remove: move the last wall into slot i
 func _remove(i: int) -> void:

@@ -20,9 +20,16 @@ const ALIASES := {
 	"laser": ["DiagonalLasers", "SquareLasers", "LeftWavingLasers", "RightWavingLasers"],
 	"ring": ["rings"],
 	"tracklight": ["TrackLights"],
+	"frame": ["SquareLasers"],
+	"construction": ["SquareLasers", "Endpath"],
+	"rectanglefakeglow": ["SquareLasers"],
+	"bottomglow": ["TrackLights"],
+	"mirror": ["floor", "../../StandingGround"],
 }
 
 var tracks := {}                   # track name -> Array of nodes (for future track events)
+var hidden_registry := {}          # the event driver's chroma_hidden dictionary (set by the game)
+var _hidden_nodes: Array[Node3D] = []
 
 var _root: Node3D
 var _nodes: Array[Node3D] = []
@@ -71,6 +78,9 @@ func restore() -> void:
 				n.get_parent().remove_child(n)
 			n.queue_free()
 	_spawned.clear()
+	for h: Node3D in _hidden_nodes:
+		hidden_registry.erase(h)
+	_hidden_nodes.clear()
 	for s: Array in _saved:
 		var n := s[0] as Node3D
 		if is_instance_valid(n):
@@ -95,8 +105,8 @@ func _collect(parent: Node, prefix: String) -> void:
 			_names.append(nm)
 			_collect(c, nm + ".")
 
-func _lookup(id: String, method: String) -> Array:
-	var key := method + "|" + id
+func _lookup(id: String, method: String, allow_alias: bool) -> Array:
+	var key := method + "|" + id + "|" + str(allow_alias)
 	if _match_cache.has(key):
 		return _match_cache[key]
 	var rx: RegEx = null
@@ -125,7 +135,7 @@ func _lookup(id: String, method: String) -> Array:
 				hit = rx != null and rx.search(nm) != null
 		if hit:
 			result.append(_nodes[i])
-	if result.is_empty():
+	if result.is_empty() and allow_alias:
 		result = _alias_lookup(id)
 	_match_cache[key] = result
 	return result
@@ -152,11 +162,17 @@ func _apply_entry(e: Dictionary) -> void:
 		return
 	var method_v: Variant = _g(e, "lookupMethod")
 	var method := String(method_v) if method_v is String else "Exact"
-	var targets := _lookup(String(id), method)
-	if targets.is_empty():
-		return
 	var dup_v: Variant = _g(e, "duplicate")
 	var dup_count := int(dup_v) if (dup_v is float or dup_v is int) else 0
+	# Beat Saber ids are only mapped onto your nodes through ALIASES for plain "hide" entries
+	# (_active: false). Duplicating or moving a stand-in node would just make a mess.
+	var active_v: Variant = _g(e, "active")
+	var allow_alias := false
+	if active_v is bool:
+		allow_alias = (not (active_v as bool)) and dup_count == 0
+	var targets := _lookup(String(id), method, allow_alias)
+	if targets.is_empty():
+		return
 	if dup_count > 0:
 		# the transform in this entry applies to the copies, the originals stay as they are
 		var copies: Array = []
@@ -184,6 +200,11 @@ func _apply_transform(n: Node3D, e: Dictionary) -> void:
 	var active: Variant = _g(e, "active")
 	if active is bool:
 		n.visible = active
+		if active:
+			hidden_registry.erase(n)
+		else:
+			hidden_registry[n] = true
+			_hidden_nodes.append(n)
 	var unit := Vector3(Settings.LANE_DISTANCE_X, Constants.LANE_DISTANCE_Y, Settings.LANE_DISTANCE_X)
 	var scale_v: Variant = _g(e, "scale")
 	if _has3(scale_v):

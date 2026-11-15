@@ -8,8 +8,8 @@ render_mode unshaded, cull_disabled;
 uniform sampler2D noise;
 varying vec3 pos;
 varying vec3 wall_size;
-varying vec4 inst_color;     // per-wall color (MultiMesh instance color)
-varying float dissolve_v;     // per-wall dissolve amount (INSTANCE_CUSTOM.w)
+varying vec3 wall_color;      // per-wall color (INSTANCE_CUSTOM.rgb)
+varying float dissolve_v;     // per-wall dissolve amount (INSTANCE_CUSTOM.a)
 uniform float texture_size = 0.5;
 uniform float sub_texture_size = 0.5;
 uniform float texture_noise_cut = 0.5;
@@ -21,9 +21,10 @@ uniform float center_cut_size = 1.0;
 uniform float center_cut_offset = 0.0;
 
 void vertex(){
-	wall_size = INSTANCE_CUSTOM.xyz;
-	inst_color = COLOR;
-	dissolve_v = INSTANCE_CUSTOM.w;
+	// real wall size = length of the instance transform's axes (the mesh is a 1 x 1 x 1 box)
+	wall_size = vec3(length(MODEL_MATRIX[0].xyz), length(MODEL_MATRIX[1].xyz), length(MODEL_MATRIX[2].xyz));
+	wall_color = INSTANCE_CUSTOM.rgb;
+	dissolve_v = INSTANCE_CUSTOM.a;
 	pos = VERTEX * wall_size;   // unit box * real size
 }
 
@@ -48,7 +49,7 @@ void fragment(){
 	if ((noise_val < texture_noise_cut && sub_noise_val+(noise_val*sub_texture_noise_cut_transition) < new_sub_texture_noise_cut) || sub_noise_val < dissolve_v){
 		ALPHA = 0.0;
 	}else{
-		ALBEDO = (vec3(noise_val)*albedo_color.rgb*inst_color.rgb)/1.4+0.1;
+		ALBEDO = (vec3(noise_val)*albedo_color.rgb*wall_color)/1.4+0.1;
 		ALBEDO *= max(0.2, float(FRONT_FACING));
 	}
 }

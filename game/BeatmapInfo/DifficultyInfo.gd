@@ -5,6 +5,8 @@ var difficulty: String
 var difficulty_rank: int
 var characteristic: String
 var beatmap_filename: String
+# v4 only: the separate file with the lighting events
+var lightshow_filename := ""
 var note_jump_movement_speed: float
 var note_jump_start_beat_offset: float
 var custom_data: Dictionary
@@ -70,13 +72,27 @@ static func load_v4(diff_dict: Dictionary) -> DifficultyInfo:
 	if name.is_empty():
 		name = diff
 	
-	return DifficultyInfo.new(
+	var info := DifficultyInfo.new(
 		diff,
-		0, # TODO: difficulty rank
-		Utils.get_str(diff_dict, "beatmapDataFilename", ""), # TODO: lightshow
+		_rank_from_name(diff),
+		Utils.get_str(diff_dict, "beatmapDataFilename", ""),
 		Utils.get_float(diff_dict, "noteJumpMovementSpeed", 1.0),
 		Utils.get_float(diff_dict, "noteJumpStartBeatOffset", 0.0),
 		data,
 		name,
 		Utils.get_str(diff_dict, "characteristic", "")
 	)
+	info.lightshow_filename = Utils.get_str(diff_dict, "lightshowDataFilename", "")
+	return info
+
+# v4 has no difficulty rank in Info.dat. these are the same ranks v2 uses, the
+# highscores and play counts are stored per rank, so without this every v4
+# difficulty of a song shared the same highscore
+static func _rank_from_name(difficulty_name: String) -> int:
+	match difficulty_name:
+		"Easy": return 1
+		"Normal": return 3
+		"Hard": return 5
+		"Expert": return 7
+		"ExpertPlus": return 9
+	return 0

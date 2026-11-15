@@ -92,12 +92,14 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	
 	if (map_data.is_empty()):
 		vr.log_error("Could not read map data from " + info.filepath + "/" + map_difficulty.beatmap_filename)
+	# v4 keeps the lighting in a separate lightshow file, hand it to the map loader
+	if not map_difficulty.lightshow_filename.is_empty():
+		var lightshow := Utils.binary_to_json(Utils.read_binary_file(info.filepath, map_difficulty.lightshow_filename))
+		if not lightshow.is_empty():
+			map_data["lightshow"] = lightshow
+	NoodleAnim.set_point_definitions(map_data)
 	if not Map.load_beatmap(info, map_difficulty, map_data):
 		return
-	
-	# Chroma environment enhancement (duplicate / move / delete environment objects)
-	chroma_env.restore()
-	chroma_env.apply(map_data)
 	
 	audio_start_position = 0.0
 	if practice_active:
@@ -154,6 +156,9 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 		percent_indicator.update_percent(current_health / Constants.HEALTH_MAX)
 	
 	_clear_track()
+	chroma_env.hidden_registry = event_driver.chroma_hidden
+	chroma_env.apply(map_data)
+	NoodleTracks.load_map(map_data)
 	_transition_game_state(gamestate_playing)
 
 # speed_percent: 50 to 200, start_seconds: position in the song (first note you will play)
@@ -261,6 +266,11 @@ func _physics_process(_dt: float) -> void:
 			Engine.get_frames_per_second(),
 			GlobalReferences.cube_pool.free_count(), GlobalReferences.cube_pool.total_count(),
 			GlobalReferences.link_pool.free_count(), GlobalReferences.link_pool.total_count()]
+		if Map.is_v4 and Map.current_info != null and Map.current_difficulty != null:
+			var now_beat := song_player.get_playback_position() * Map.current_info.beats_per_minute / 60.0
+			dbg_text += "\nv4 NJS base: %.1f  now: %.1f\nlast note NJS: %.1f (beat %.2f)\nNJS events: %d" % [
+				Map.current_difficulty.note_jump_movement_speed, Map.get_njs_at_beat(now_beat),
+				Map.last_note_njs, Map.last_note_beat, Map.njs_events.size()]
 		(debug_info_label.mesh as TextMesh).text = dbg_text
 	
 	gamestate._physics_process(self)

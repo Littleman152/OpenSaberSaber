@@ -20,6 +20,9 @@ uniform bool is_chain_head = false;
 // 0 = solid, 1 = fully gone. Noise-threshold cutout with a glowing edge, like Beat Saber's.
 uniform float dissolve : hint_range(0.0, 1.0) = 0.0;
 uniform float dissolve_arrow : hint_range(0.0, 1.0) = 0.0;   // fades only the arrow / dot
+uniform float spawn_dissolve_start = -16.0;   // z where notes appear (4 beats * 4 m ahead)
+uniform float spawn_dissolve_length = 6.0;    // meters until a note is fully solid; 0 disables it
+uniform bool glyph_only = false;   // fake / uninteractable notes: only the arrow (or dot) is drawn
 uniform float dissolve_noise_scale = 6.0;    // bigger = finer pattern
 uniform float dissolve_edge_width = 0.08;    // thickness of the glowing rim
 uniform float dissolve_edge_energy = 3.0;    // brightness of the glowing rim
@@ -48,8 +51,10 @@ uniform float cut_plane_dist = 0;
 varying float cut_interp;
 varying float chain_interp;
 varying vec3 obj_pos;
+varying float note_z;
 void vertex() {
 	obj_pos = VERTEX;
+	note_z = MODEL_MATRIX[3].z;   // world z of the note
 	if (is_chain_head) {
 		chain_interp = 0.1 + VERTEX.y;
 	}
@@ -69,15 +74,27 @@ void fragment() {
 
 	// Dissolve: pixels whose noise value is below the threshold disappear,
 	// pixels just above it glow, which gives the burning-away rim.
+	float dissolve_amount = dissolve;
+	if (spawn_dissolve_length > 0.0) {
+		dissolve_amount = max(dissolve_amount, clamp(1.0 - (note_z - spawn_dissolve_start) / spawn_dissolve_length, 0.0, 1.0));
+	}
 	float dissolve_glow = 0.0;
-	if (dissolve > 0.0) {
+	if (dissolve_amount > 0.0) {
 		float n = smoothstep(0.15, 0.85, value_noise(obj_pos * dissolve_noise_scale));
-		float edge = n - dissolve * (1.0 + dissolve_edge_width);
+		float edge = n - dissolve_amount * (1.0 + dissolve_edge_width);
 		if (edge < 0.0) {
 			discard;
 		}
 		// fade the rim in over the first 5% so it doesn't pop when dissolve starts
-		dissolve_glow = (1.0 - smoothstep(0.0, dissolve_edge_width, edge)) * smoothstep(0.0, 0.05, dissolve);
+		dissolve_glow = (1.0 - smoothstep(0.0, dissolve_edge_width, edge)) * smoothstep(0.0, 0.05, dissolve_amount);
+	}
+
+	if (glyph_only) {
+		// cut the cube body away, keep only the arrow / dot pixels of the emission texture
+		vec2 glyph_uv = is_dot ? vec2(UV.x + 0.5, UV.y) : UV;
+		if (!FRONT_FACING || texture(texture_emission, glyph_uv).r < 0.2) {
+			discard;
+		}
 	}
 
 	ALBEDO = color.rgb;

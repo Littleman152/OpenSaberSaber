@@ -252,8 +252,8 @@ func _handle_area_collided(area: Area3D) -> void:
 	controller.simple_rumble(0.75, 0.1)
 	
 	var o := controller.global_transform.origin
-	const BEAT_DISTANCE := 4.0
-	var cutplane := Plane(o, saber_end, saber_end_past + Vector3(0, 0, BEAT_DISTANCE * Map.current_info.beats_per_minute * last_dt / 30)) # Account for relative position to track speed
+	# same value as before for normal notes (4 * bpm / 30 * dt), but follows the note's own speed on v4 VNJS maps
+	var cutplane := Plane(o, saber_end, saber_end_past + Vector3(0, 0, 2.0 * note.speed * last_dt)) # Account for relative position to track speed
 	note.cut(self, controller_speed, cutplane, controller)
 
 func _on_AnimationPlayer_animation_started(_anim_name: StringName) -> void:

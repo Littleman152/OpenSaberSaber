@@ -67,7 +67,9 @@ func spawn(chain_info: ChainInfo, current_beat: float, head_pos: Vector2, tail_p
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	
 	var color := Map.color_left if chain_info.color == 0 else Map.color_right
-	speed = Constants.BEAT_DISTANCE * Map.current_info.beats_per_minute * 0.016666666666666667
+	# the whole chain uses the speed of its head note so the links stay together (v4 VNJS)
+	var speed_scale := Map.get_speed_scale(chain_info.head_beat)
+	speed = Constants.BEAT_DISTANCE * Map.current_info.beats_per_minute * 0.016666666666666667 * speed_scale
 	which_saber = chain_info.color
 	
 	var lerp_factor := float(link_index) / float(chain_info.slice_count - 1) * chain_info.squish_factor
@@ -82,7 +84,7 @@ func spawn(chain_info: ChainInfo, current_beat: float, head_pos: Vector2, tail_p
 	
 	transform.origin.x = bezier_pos.x
 	transform.origin.y = bezier_pos.y
-	transform.origin.z = -(beat - current_beat) * Constants.BEAT_DISTANCE
+	transform.origin.z = -(beat - current_beat) * Constants.BEAT_DISTANCE * speed_scale
 	
 	add_lane_rotation(chain_info.rotation)
 	
@@ -91,7 +93,7 @@ func spawn(chain_info: ChainInfo, current_beat: float, head_pos: Vector2, tail_p
 	# little bit of forgiveness.  if the chain link is more than a meter away
 	# from the chain head, its hitbox is extended to halfway between the link
 	# and the head.
-	var z_distance_from_head := (beat - chain_info.head_beat) * Constants.BEAT_DISTANCE
+	var z_distance_from_head := (beat - chain_info.head_beat) * Constants.BEAT_DISTANCE * speed_scale
 	if z_distance_from_head > 1.0:
 		var collision := $Area3D/CollisionShape3D as CollisionShape3D
 		var new_size := z_distance_from_head * 0.5
@@ -103,7 +105,7 @@ func spawn(chain_info: ChainInfo, current_beat: float, head_pos: Vector2, tail_p
 	_mat.set_shader_parameter(&"color", color)
 	
 	var anim := $AnimationPlayer as AnimationPlayer
-	var anim_speed := Map.current_difficulty.note_jump_movement_speed / 9.0
+	var anim_speed := Map.get_object_njs(beat) / 9.0
 	anim.speed_scale = maxf(min_speed,anim_speed)
 	anim.play(&"Spawn")
 	

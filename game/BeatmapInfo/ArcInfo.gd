@@ -96,7 +96,12 @@ func create_curve() -> void:
 				) * arc_angle_force
 			
 			curve.add_point(point_pos - tail_pos, Vector3.ZERO, Vector3.ZERO)
-		# calculate smooth in out directions after all points have been set
+	# the tail has to exist before the smoothing below, which looks at the point after the
+	# last midpoint (before, this was out of bounds for every arc with a mid anchor)
+	curve.add_point(tail_pos - tail_pos, Vector3(tail_cut_rotation.x, tail_cut_rotation.y, 0.0) * arc_angle_force, Vector3.ZERO)
+	
+	if mid_anchor_mode > 0:
+		# calculate smooth in out directions after all points (including the tail) have been set
 		for smoothpoint_id in range(mid_points):
 			var prev_point_pos := curve.get_point_position(smoothpoint_id)
 			var current_point_pos := curve.get_point_position(smoothpoint_id + 1)
@@ -109,8 +114,6 @@ func create_curve() -> void:
 							current_point_pos.distance_to(next_point_pos)) * 0.25
 			curve.set_point_in(smoothpoint_id + 1, smooth_dir * -distance)
 			curve.set_point_out(smoothpoint_id + 1, smooth_dir * distance)
-	
-	curve.add_point(tail_pos - tail_pos, Vector3(tail_cut_rotation.x, tail_cut_rotation.y, 0.0) * arc_angle_force, Vector3.ZERO)
 
 static func new_v2(arc_dict: Dictionary) -> ArcInfo:
 	return ArcInfo.new(
