@@ -1,6 +1,12 @@
 extends Node3D
 class_name EventDriver
 
+# nodes the map's Chroma environment hid; they must stay hidden when lights switch on
+var chroma_hidden := {}
+
+func _set_vis(node: Node3D, value: bool) -> void:
+	node.visible = value and not chroma_hidden.has(node)
+
 var ring_rot_speed := 0.0
 var ring_rot_inv_dir := false
 var rings_in := false
@@ -160,7 +166,7 @@ func set_all_off() -> void:
 	if disabled:
 		for i in range(1,4):
 			turn_light_off(i)
-		ring_holder.visible = false
+		_set_vis(ring_holder, false)
 	else:
 		for i in range(5):
 			turn_light_off(i)
@@ -169,7 +175,7 @@ func set_all_on(left: Color, right: Color) -> void:
 	if !disabled:
 		update_left_color(left)
 		update_right_color(right)
-		ring_holder.visible = true
+		_set_vis(ring_holder, true)
 
 func process_event(data: EventInfo) -> void:
 	if disabled: return
@@ -235,19 +241,19 @@ func turn_light_off(type: int) -> void:
 	_on_Tween_tween_step(Color.BLACK, type)
 	match type:
 		EventInfo.TYPE_DIAGONAL_LASERS:
-			diagonal_lasers_holder.visible = false
+			_set_vis(diagonal_lasers_holder, false)
 			diagonal_lasers_material.albedo_color = Color.BLACK
 		EventInfo.TYPE_SQUARE_LASERS:
-			square_lasers_holder.visible = false
+			_set_vis(square_lasers_holder, false)
 			square_lasers_material.albedo_color = Color.BLACK
 		EventInfo.TYPE_LEFT_WAVING_LASERS:
-			left_waving_lasers_holder.visible = false
+			_set_vis(left_waving_lasers_holder, false)
 			left_waving_lasers_material.albedo_color = Color.BLACK
 		EventInfo.TYPE_RIGHT_WAVING_LASERS:
-			right_waving_lasers_holder.visible = false
+			_set_vis(right_waving_lasers_holder, false)
 			right_waving_lasers_material.albedo_color = Color.BLACK
 		EventInfo.TYPE_FLOOR_LIGHTS:
-			track_lights_holder.visible = false
+			_set_vis(track_lights_holder, false)
 			track_lights_material.albedo_color = Color.BLACK
 			floor_material.albedo_color = Color.BLACK
 	
@@ -257,19 +263,19 @@ func turn_light_on(type: int, color: Color) -> void:
 	_on_Tween_tween_step(color, type)
 	match type:
 		EventInfo.TYPE_DIAGONAL_LASERS:
-			diagonal_lasers_holder.visible = true
+			_set_vis(diagonal_lasers_holder, true)
 			diagonal_lasers_material.albedo_color = color
 		EventInfo.TYPE_SQUARE_LASERS:
-			square_lasers_holder.visible = true
+			_set_vis(square_lasers_holder, true)
 			square_lasers_material.albedo_color = color
 		EventInfo.TYPE_LEFT_WAVING_LASERS:
-			left_waving_lasers_holder.visible = true
+			_set_vis(left_waving_lasers_holder, true)
 			left_waving_lasers_material.albedo_color = color
 		EventInfo.TYPE_RIGHT_WAVING_LASERS:
-			right_waving_lasers_holder.visible = true
+			_set_vis(right_waving_lasers_holder, true)
 			right_waving_lasers_material.albedo_color = color
 		EventInfo.TYPE_FLOOR_LIGHTS:
-			track_lights_holder.visible = true
+			_set_vis(track_lights_holder, true)
 			track_lights_material.albedo_color = color
 			floor_material.albedo_color = color
 
@@ -318,7 +324,7 @@ func fade_light(type: int, from: Color, to: Color, turn_off_after_fade: bool, tr
 			group = track_lights_holder
 			material = [track_lights_material, floor_material]
 	
-	group.visible = true
+	_set_vis(group, true)
 	
 	var tween := group.create_tween()
 	@warning_ignore("return_value_discarded")
@@ -332,7 +338,7 @@ func fade_light(type: int, from: Color, to: Color, turn_off_after_fade: bool, tr
 	prev_tweeners[type] = tween
 	await tween.finished
 	if turn_off_after_fade:
-		group.visible = false
+		_set_vis(group, false)
 		tween.kill()
 		_on_Tween_tween_step(Color.BLACK, type)
 
