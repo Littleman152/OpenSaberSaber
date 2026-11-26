@@ -8,13 +8,19 @@ class_name WallBatch
 
 const BASE_MATERIAL := "res://game/Wall/wall_new2.material"
 const BATCH_SHADER := "res://game/Wall/wall_batched.gdshader"
+const BATCH_SHADER_TRANSLUCENT := "res://game/Wall/wall_batched_translucent.gdshader"
 const MAX_WALLS := 4096
 const SPAWN_ANIM_TIME := 1.0     # matches the "Spawn" animation in Wall.tscn (non-Noodle walls)
 const SPAWN_ANIM_EASE := 0.0883885
 
 # ---- TUNING: my assumptions about Noodle, change these if the result looks off ----
 # If true, "_position" is added on top of "_definitePosition" (default: definite wins).
-const POSITION_ADDS_TO_DEFINITE := false
+const POSITION_ADDS_TO_DEFINITE := true
+
+# Smooth appear / disappear (like Beat Saber). One beat is Constants.BEAT_DISTANCE meters.
+const PRE_SPAWN_BEATS := 4.0    # walls become visible at least this far ahead, like notes
+const FADE_IN_BEATS := 0.75     # fade in after appearing
+const FADE_OUT_BEATS := 0.75    # fade out before being removed
 
 class W extends RefCounted:
 	var origin := Vector3.ZERO      # legacy path position (moves along dir)
@@ -29,6 +35,10 @@ class W extends RefCounted:
 	var start_beat := 0.0
 	var life_beats := 1.0
 	var has_def := false
+	var anim := {}                  # the animation used: the wall's own plus the track's path animation
+	var resolved := true            # false until the track's path animation has been looked up
+	var spawn_beat := 0.0
+	var visible_from := 0.0         # beat at which the wall starts to be drawn (fades in from here)
 	var offset := Vector3.ZERO      # static "_position" offset in meters (game space)
 	var world_basis := Basis.IDENTITY
 	var local_basis := Basis.IDENTITY
@@ -38,9 +48,8 @@ var _walls: Array[W] = []
 var _speed := 0.0
 var _beat_now := 0.0
 var _beats_per_sec := 1.0
-var _dbg_frames := 0   # DEBUG, remove later
 
-func setup() -> void:
+func setup(translucent := false) -> void:
 	var unit_box := BoxMesh.new()   # default size is 1 x 1 x 1
 	_mm.transform_format = MultiMesh.TRANSFORM_3D
 	_mm.use_custom_data = true      # rgb = wall color, a = dissolve (size comes from the instance transform)
@@ -51,12 +60,12 @@ func setup() -> void:
 
 	var base := load(BASE_MATERIAL) as ShaderMaterial
 	var mat := base.duplicate() as ShaderMaterial
-	mat.shader = load(BATCH_SHADER) as Shader
+	mat.shader = load(BATCH_SHADER_TRANSLUCENT if translucent else BATCH_SHADER) as Shader
 	material_override = mat
 
 	layers = 3                      # same render layers as WallMesh in Wall.tscn
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	custom_aabb = AABB(Vector3(-300, -100, -300), Vector3(600, 200, 600))
+	custom_aabb = AABB(Vector3(-20000, -20000, -20000), Vector3(40000, 40000, 40000))
 
 static func _nonzero(v: float) -> float:
 	return v if absf(v) > 0.001 else 0.001
@@ -89,6 +98,9 @@ func add_wall(wall_info: ObstacleInfo, current_beat: float) -> void:
 
 	var x := (0.5 * wall_info.width + wall_info.line_index - 2) * Settings.LANE_DISTANCE_X
 	var y := (0.5 * wall_info.height + wall_info.line_layer) * Constants.LANE_DISTANCE_Y
+	if wall_info.noodle and wall_info.has_position:
+		x = 0.0   # Noodle "_position" replaces the lane position, the offset is added below
+		y = 0.0
 	var z := (current_beat - wall_info.beat) * Constants.BEAT_DISTANCE - depth
 	var c := cos(wall_info.rotation)
 	var s := sin(wall_info.rotation)
@@ -112,13 +124,23 @@ func add_wall(wall_info: ObstacleInfo, current_beat: float) -> void:
 		var hjd := _half_jump(wall_info, bpm)
 		w.start_beat = wall_info.beat - hjd
 		w.life_beats = 2.0 * hjd + wall_info.duration
+		w.anim = wall_info.anim
 		w.has_def = wall_info.anim.has("def_pos")
+		w.spawn_beat = current_beat
+		w.visible_from = minf(w.start_beat, wall_info.beat - PRE_SPAWN_BEATS)
+		w.resolved = wall_info.tracks.is_empty()
 		if wall_info.has_scale:
 			w.size = Vector3(
 				_nonzero(wall_info.nd_scale.x * unit.x),
 				_nonzero(wall_info.nd_scale.y * unit.y),
 				_nonzero(wall_info.nd_scale.z * unit.z))
 		w.offset = Vector3(wall_info.nd_position.x * unit.x, wall_info.nd_position.y * unit.y, 0.0)
+		if wall_info.has_position:
+			# "_position" is the wall's bottom-left corner, 0 = middle of the track.
+			# The batch draws walls from their center, so add half the wall's size.
+			var half_x := (wall_info.nd_scale.x if wall_info.has_scale else wall_info.width) * 0.5
+			var half_y := (wall_info.nd_scale.y if wall_info.has_scale else wall_info.height) * 0.5
+			w.offset += Vector3(half_x * unit.x, half_y * unit.y, 0.0)
 		w.world_basis = _euler_basis(wall_info.nd_rotation)
 		w.local_basis = _euler_basis(wall_info.nd_local_rotation)
 	_walls.append(w)
@@ -150,19 +172,24 @@ func _physics_process(delta: float) -> void:
 		_write_instance(i, w, t)
 		i += 1
 	_mm.visible_instance_count = _walls.size()
-	# DEBUG, remove later: once per second describe the first wall that has a track
-	_dbg_frames += 1
-	if _dbg_frames % 60 == 0 and NoodleTracks.current != null:
-		for dw in _walls:
-			if dw.noodle and not dw.info.tracks.is_empty():
-				var dt: float = (_beat_now - dw.start_beat) / dw.life_beats
-				print("[WALLTRACK] beat=", snappedf(_beat_now, 0.01), " walls=", _walls.size(), " wall t=", snappedf(dt, 0.001), " track chain: ", NoodleTracks.current.describe(dw.info.tracks[0]))
-				break
+
+func _resolve_paths(w: W) -> void:
+	w.resolved = true
+	var merged := w.info.anim.duplicate()
+	for tname: String in w.info.tracks:
+		var pa := NoodleTracks.current.path_animation(tname, w.spawn_beat)
+		for k: String in pa:
+			merged[k] = pa[k]
+	w.anim = merged
+	w.has_def = merged.has("def_pos")
 
 func _write_instance(i: int, w: W, t: float) -> void:
 	var sz := w.size
 	var color := Color.WHITE
-	var dissolve := 0.0
+	var alpha := 1.0                # map color alpha (negative = render-order trick, treated as opaque)
+	var dissolve := 0.0             # shader value: 0 = solid, 1 = gone
+	var opacity := 1.0              # Noodle value: 1 = visible, 0 = invisible
+	var fade := 1.0                 # smooth appear / disappear
 	var b := w.lane_basis
 	var pos := w.origin
 	var parent_xf := Transform3D.IDENTITY
@@ -171,29 +198,42 @@ func _write_instance(i: int, w: W, t: float) -> void:
 		if w.age < SPAWN_ANIM_TIME:
 			sz.y *= lerpf(0.1, 1.0, ease(w.age / SPAWN_ANIM_TIME, SPAWN_ANIM_EASE))
 	else:
-		if t < 0.0:
-			# not alive yet in Noodle time: keep it tiny and out of sight
+		if _beat_now < w.visible_from:
+			# not visible yet: keep it tiny and out of sight
 			_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.0001), Vector3(0.0, -1000.0, 0.0)))
 			return
-		var a := w.info.anim
+		# smooth fade in, and fade out near the end of the wall's life
+		fade = clampf((_beat_now - w.visible_from) / FADE_IN_BEATS, 0.0, 1.0)
+		fade *= clampf((1.0 - t) * w.life_beats / FADE_OUT_BEATS, 0.0, 1.0)
+		if not w.has_def:
+			var remaining := w.despawn_z - w.origin.dot(w.dir)
+			fade *= clampf(remaining / (FADE_OUT_BEATS * Constants.BEAT_DISTANCE), 0.0, 1.0)
+		t = maxf(t, 0.0)   # before its own start the animation stays at its first frame
+		if not w.resolved and NoodleTracks.current != null:
+			_resolve_paths(w)
+		var a := w.anim
 		var unit := _unit()
+		var anim_pos := Vector3.ZERO
+		if a.has("position"):
+			var av := NoodleAnim.sample(a["position"], t)
+			anim_pos = Vector3(av.x * unit.x, av.y * unit.y, -av.z * unit.z)
 		var world_b := w.world_basis
 		var local_b := w.local_basis
 		color = w.info.nd_color
+		alpha = w.info.nd_alpha                                  # source 1: the wall's own _color
 		if a.has("scale"):
 			var sv := NoodleAnim.sample(a["scale"], t)
 			sz *= Vector3(sv.x, sv.y, sv.z)
 		if a.has("rotation"):
-			var rv := NoodleAnim.sample(a["rotation"], t)
-			world_b = _euler_basis(Vector3(rv.x, rv.y, rv.z))
+			world_b = Basis(NoodleAnim.sample_rotation(a["rotation"], t))
 		if a.has("local_rotation"):
-			var lv := NoodleAnim.sample(a["local_rotation"], t)
-			local_b = _euler_basis(Vector3(lv.x, lv.y, lv.z))
+			local_b = Basis(NoodleAnim.sample_rotation(a["local_rotation"], t))
 		if a.has("dissolve"):
-			dissolve = clampf(NoodleAnim.sample(a["dissolve"], t).x, 0.0, 1.0)
+			opacity = clampf(NoodleAnim.sample(a["dissolve"], t).x, 0.0, 1.0)
 		if a.has("color"):
 			var cv := NoodleAnim.sample(a["color"], t)
 			color = Color(cv.x, cv.y, cv.z, 1.0)
+			alpha = cv.w                                         # source 2: the wall's _animation _color
 		# Noodle track events: the wall's tracks add their animation on top of its own
 		var trk_pos := Vector3.ZERO
 		var trk := NoodleTracks.current
@@ -202,11 +242,12 @@ func _write_instance(i: int, w: W, t: float) -> void:
 				var ts := trk.state(tname)
 				sz *= ts.scale
 				trk_pos += ts.position
-				world_b = NoodleTracks.euler_basis(ts.rotation) * world_b
-				local_b = local_b * NoodleTracks.euler_basis(ts.local_rotation)
-				dissolve = clampf(dissolve + ts.dissolve, 0.0, 1.0)
+				world_b = Basis(ts.rot_q) * world_b
+				local_b = local_b * Basis(ts.local_rot_q)
+				opacity *= ts.dissolve
 				if ts.has_color:
-					color = Color(color.r * ts.color.r, color.g * ts.color.g, color.b * ts.color.b, 1.0)
+					color = Color(ts.color.r, ts.color.g, ts.color.b, 1.0)
+					alpha = ts.color.a                           # source 3: AnimateTrack _color events
 			parent_xf = trk.parent_transform(w.info.tracks[0])
 		if w.has_def:
 			var pv := NoodleAnim.sample(a["def_pos"], t)
@@ -216,11 +257,18 @@ func _write_instance(i: int, w: W, t: float) -> void:
 			b = Basis.IDENTITY
 		else:
 			pos = w.origin + w.offset
-		pos += trk_pos
+		pos += trk_pos + anim_pos
 		pos = world_b * pos            # "_rotation" turns the object around the player
 		b = world_b * b * local_b
+		if alpha >= 0.0:
+			opacity *= minf(alpha, 1.0)
+		opacity *= fade
 
-	_mm.set_instance_transform(i, parent_xf * Transform3D(b.scaled_local(sz), pos))
+	dissolve = 1.0 - opacity
+	var world_xf := Transform3D.IDENTITY
+	if NoodleTracks.current != null:
+		world_xf = NoodleTracks.current.player_inverse()   # the map moved the player: move the walls the opposite way
+	_mm.set_instance_transform(i, world_xf * parent_xf * Transform3D(b.scaled_local(sz), pos))
 	_mm.set_instance_custom_data(i, Color(color.r, color.g, color.b, dissolve))
 
 # swap-remove: move the last wall into slot i

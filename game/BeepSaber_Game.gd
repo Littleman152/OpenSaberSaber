@@ -60,39 +60,26 @@ var current_health := Constants.HEALTH_START
 
 @onready var menu := main_menu.ui_control as MainMenu
 
-
-# There's an interesting issue where the AudioStreamPlayer's playback_position
-# doesn't immediately return to 0.0 after restarting the song_player. This
-# causes issues with restarting a map because the process_physics routine will
-# execute for a times and attempt to process the map up to the playback_position
-# prior to the AudioStreamPlayer restart. This bug can presents itself as notes
-# persisting between map restarts.
-# To remidy this issue, this flag is set to true when the map is restarted. The
-# process_physics routine won't begin processing the map until after the
-# AudioStreamPlayer has reset it's playback_position to zero. This flag is set
-# to false once the AudioStreamPlayer reset is detected.
 var _audio_synced_after_restart := false
-
 var _in_wall := false
-
-#prevents the song for starting from the start when pausing and unpausing
 var pause_position := 0.0
 
 # --- practice mode ---
-# seconds of music you hear before the first note you will actually play
 const PRACTICE_LEAD_IN := 3.0
 var practice_active := false
 var practice_start_seconds := 0.0
-# where song_player starts playing; Playing.gd uses it for the restart sync check
 var audio_start_position := 0.0
 var _saved_music_speed := -1
+
+var player_rig: Node3D
+var _sky_sphere: Node3D
+var _sky_offset := Vector3.ZERO
 
 func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	var map_data := Utils.binary_to_json(Utils.read_binary_file(info.filepath, map_difficulty.beatmap_filename))
 	
 	if (map_data.is_empty()):
 		vr.log_error("Could not read map data from " + info.filepath + "/" + map_difficulty.beatmap_filename)
-	# v4 keeps the lighting in a separate lightshow file, hand it to the map loader
 	if not map_difficulty.lightshow_filename.is_empty():
 		var lightshow := Utils.binary_to_json(Utils.read_binary_file(info.filepath, map_difficulty.lightshow_filename))
 		if not lightshow.is_empty():
@@ -103,7 +90,6 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	
 	audio_start_position = 0.0
 	if practice_active:
-		# the first note you play lands at practice_start_seconds, the music starts a bit earlier
 		var start_beat := practice_start_seconds * Map.current_info.beats_per_minute / 60.
 		Map.skip_to_beat(start_beat)
 		audio_start_position = maxf(0.0, practice_start_seconds - PRACTICE_LEAD_IN)
@@ -158,10 +144,11 @@ func start_map(info: MapInfo, map_difficulty: DifficultyInfo) -> void:
 	_clear_track()
 	chroma_env.hidden_registry = event_driver.chroma_hidden
 	chroma_env.apply(map_data)
+	chroma_env.apply(map_data)
+	chroma_env.apply_removal(map_difficulty.custom_data)
 	NoodleTracks.load_map(map_data)
 	_transition_game_state(gamestate_playing)
 
-# speed_percent: 50 to 200, start_seconds: position in the song (first note you will play)
 func start_practice(info: MapInfo, map_difficulty: DifficultyInfo, speed_percent: int, start_seconds: float) -> void:
 	if _saved_music_speed < 0:
 		_saved_music_speed = Settings.music_speed
@@ -170,7 +157,6 @@ func start_practice(info: MapInfo, map_difficulty: DifficultyInfo, speed_percent
 	practice_start_seconds = start_seconds
 	start_map(info, map_difficulty)
 
-# restores the normal settings, called when going back to the song selection
 func _end_practice() -> void:
 	practice_active = false
 	if _saved_music_speed >= 0:
@@ -201,14 +187,13 @@ func update_health(delta: float) -> void:
 		if current_health < 0:
 			_on_song_ended()
 			
-# This function will transitioning the game from it's current state into
-# the provided 'next_state'.
 func _transition_game_state(next_state: GameState) -> void:
 	if next_state == gamestate_mapselection:
 		_end_practice()
-	# the practice menu is only shown by its own state
 	if practice_canvas:
 		practice_canvas._hide()
+	if next_state != gamestate_playing:
+		player_rig.transform = Transform3D.IDENTITY
 	gamestate = next_state
 	gamestate._ready(self)
 
@@ -222,7 +207,6 @@ func show_MapSourceDialogs(showing: bool = true) -> void:
 		if first_dialog is OQ_UI2DCanvas:
 			(first_dialog as OQ_UI2DCanvas)._show()
 
-# call this method to submit a new highscore to the database
 func _submit_highscore(player_name: String) -> void:
 	if gamestate == gamestate_newhighscore:
 		Highscores.add_highscore(
@@ -234,7 +218,6 @@ func _submit_highscore(player_name: String) -> void:
 		_transition_game_state(gamestate_mapcomplete)
 
 func _check_and_update_saber(controller: BeepSaberController, saber: LightSaber) -> void:
-	# to allow extending/sheething the saber while not playing a song
 	if ((not song_player.playing)
 		and (controller.ax_just_pressed() or controller.by_just_pressed())
 		and (not saber._anim.is_playing())):
@@ -244,19 +227,25 @@ func _check_and_update_saber(controller: BeepSaberController, saber: LightSaber)
 	if _in_wall:
 		Scoreboard.enter_wall()
 	
-	# check for saber rumble (only when extended and not already rumbling)
-	# this check is necessary to not overwrite a rumble set from somewhere else
-	# (in this case it can come from cutting cubes)
 	if not controller.is_simple_rumbling(): 
 		if _in_wall:
-			# weak rumble on both controllers when player is inside wall
 			controller.simple_rumble(0.3, 0.3)
 		elif saber.get_overlapping_areas().size() > 0 or saber.get_overlapping_bodies().size() > 0:
-			# strong rumble when saber is cutting into wall or other saber
 			controller.simple_rumble(0.5, 0.1)
 		else:
 			controller.simple_rumble(0.0, 0.1)
 
+func _update_noodle_player_rig() -> void:
+	if player_rig == null:
+		return
+	if gamestate != gamestate_playing:
+		player_rig.transform = Transform3D.IDENTITY
+		return
+	var trk := NoodleTracks.current
+	if trk != null and trk.MOVE_PLAYER:
+		player_rig.transform = trk.player_transform()
+	else:
+		player_rig.transform = Transform3D.IDENTITY
 
 func _physics_process(_dt: float) -> void:
 	Scoreboard.score_changed.emit()
@@ -274,6 +263,9 @@ func _physics_process(_dt: float) -> void:
 		(debug_info_label.mesh as TextMesh).text = dbg_text
 	
 	gamestate._physics_process(self)
+	_update_noodle_player_rig()
+	if _sky_sphere != null:
+		_sky_sphere.global_position = player_rig.global_position + _sky_offset
 	
 	_check_and_update_saber(left_controller, left_saber)
 	_check_and_update_saber(right_controller, right_saber)
@@ -285,13 +277,14 @@ func _enter_tree() -> void:
 	Settings.changed.connect(on_settings_changed)
 
 func _ready() -> void:
-	# pre-allocate scenes in our scene pools
+	_create_player_rig()
+	
 	GlobalReferences.cube_pool = $BeepCubePool
 	GlobalReferences.link_pool = $ChainLinkPool
-	GlobalReferences.cube_pool.presize(100)
+	GlobalReferences.cube_pool.presize(160)
 	GlobalReferences.link_pool.presize(100)
 	
-	var xr_camera := $XROrigin3D/XRCamera3D as XRCamera3D
+	var xr_camera := xr_origin.get_node("XRCamera3D") as XRCamera3D
 	vr.initialize(
 		xr_origin,
 		xr_camera,
@@ -311,7 +304,6 @@ func _ready() -> void:
 	UI_AudioEngine.attach_children(highscore_keyboard)
 	UI_AudioEngine.attach_children(online_search_keyboard)
 	
-	# the upload url label was moved from the main menu to the settings page
 	var upload_label := settings_panel.find_child("upload_url", true, false) as Label
 	if upload_label:
 		if menu.song_uploader_ref and menu.song_uploader_ref.active:
@@ -334,7 +326,6 @@ func _ready() -> void:
 	@warning_ignore("return_value_discarded")
 	Scoreboard.points_awarded.connect(points_label_driver.show_points)
 	
-	#render common assets for a couple of frames to prevent performance issues when loading them mid game
 	($pre_renderer as Node3D).visible = true
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -351,7 +342,6 @@ func set_background_texture() -> void:
 	panorama.panorama = load(Settings.background_texture)	
 	
 func on_settings_changed(key: StringName) -> void:
-	# ensures proper initialization of tree for proper first frame setting loading
 	await get_tree().process_frame
 	match key:
 		&"left_handed":
@@ -405,6 +395,8 @@ func update_right_color(color: Color) -> void:
 	standing_ground.update_right_color(color)
 
 func _clear_track() -> void:
+	player_rig.transform = Transform3D.IDENTITY
+	gamestate_playing.reset_batch_stack()
 	chroma_env.restore()
 	for c in track.get_children():
 		if c.has_method("clear_from_track"):
@@ -437,7 +429,6 @@ func _display_points() -> void:
 	if not Settings.health_mode:
 		percent_indicator.update_percent(hit_rate)
 
-# accessor method for the player name selector UI element
 func _name_selector() -> NameSelector:
 	return name_selector_canvas.ui_control
 
@@ -456,8 +447,6 @@ func _on_PlayerHead_area_exited(area: Area3D) -> void:
 func get_current_time() -> float:
 	return song_player.get_playback_position()
 
-# when the song ended we want to display the current score and
-# the high score
 func _on_song_ended() -> void:
 	song_player.stop()
 	if not practice_active:
@@ -466,13 +455,10 @@ func _on_song_ended() -> void:
 	var new_record := false
 	var highscore := Highscores.get_highscore(Map.current_info,Map.current_difficulty.difficulty_rank)
 	if practice_active:
-		# practice runs never count for the highscores
 		highscore = Scoreboard.points
 	elif highscore == -1:
-		# no highscores exist yet
 		highscore = Scoreboard.points
 	elif Scoreboard.points > highscore:
-		# player's score is the new highscore!
 		highscore = Scoreboard.points
 		new_record = true
 
@@ -520,7 +506,6 @@ func _unpause_button() -> void:
 	await get_tree().create_timer(0.5).timeout
 	pause_countdown.visible = false
 	
-	# continue game play
 	song_player.play(pause_position)
 	_transition_game_state(gamestate_playing)
 
@@ -530,7 +515,6 @@ func _on_BeepSaberMainMenu_difficulty_changed(map_info: MapInfo, diff_rank: int)
 			highscore_canvas.hide()
 		return
 		
-	# menu loads playlist in _ready(), must yield until scene is loaded
 	if not highscore_canvas:
 		await self.ready
 	
@@ -546,12 +530,8 @@ func _on_settings_Panel_apply() -> void:
 	_transition_game_state(gamestate_mapselection)
 
 func _on_ScenePool_new_scene_instanced(obj: Node3D, during_presizing: bool) -> void:
-	# add obj to the track. it will reside inside the track for eternity, only
-	# to be reposition and made visible again when it is acquired and spawned.
 	track.add_child(obj)
 	
-	# make obj visible and wait for a frame to be processed. this tricks
-	# shaders to be loaded at startup time.
 	if during_presizing:
 		obj.position.z = -2.0
 		await get_tree().process_frame
@@ -564,9 +544,10 @@ func _on_ScenePool_new_scene_instanced(obj: Node3D, during_presizing: bool) -> v
 			obj.visible = false
 
 func recenter():
-	var xr_camera := $XROrigin3D/XRCamera3D as XRCamera3D
-	xr_origin.rotation.y -= xr_camera.global_rotation.y
-	xr_origin.position -= (xr_camera.global_position * Vector3(1,0,1)) - Vector3(0,0,1)
+	var xr_camera := xr_origin.get_node("XRCamera3D") as XRCamera3D
+	var cam := player_rig.global_transform.affine_inverse() * xr_camera.global_transform
+	xr_origin.rotation.y -= cam.basis.get_euler(EULER_ORDER_YXZ).y
+	xr_origin.position -= (cam.origin * Vector3(1, 0, 1)) - Vector3(0, 0, 1)
 
 func _set_hand(right: bool, hand: bool) -> void:
 	var angle_offset := -45. if hand else 0.
@@ -588,3 +569,18 @@ func _on_left_controller_profile_changed(role: String) -> void:
 		_set_hand(false, true)
 	else:
 		_set_hand(false, false)
+
+func _create_player_rig() -> void:
+	player_rig = Node3D.new()
+	player_rig.name = "PlayerRig"
+	add_child(player_rig)
+	xr_origin.reparent(player_rig, false)
+	for n: String in ["Multiplier_Label", "Point_Label", "Percent_Indicator", "event_driver", "StandingGround"]:
+		var node := get_node_or_null(n) as Node3D
+		if node != null:
+			node.reparent(player_rig, false)
+	# the backdrop sphere follows the player's position only, never its rotation
+	_sky_sphere = event_driver.get_node_or_null("Level/Sphere") as Node3D
+	if _sky_sphere != null:
+		_sky_offset = _sky_sphere.global_position   # the rig is still at identity here
+		_sky_sphere.top_level = true                # keeps its current global transform, then ignores the parents

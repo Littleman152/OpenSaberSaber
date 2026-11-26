@@ -7,6 +7,8 @@ var line_layer: float
 var rotation: float
 var interactable := true
 var fake := false
+var noodle: ObstacleInfo = null   # Noodle data (parsed like walls); null when the bomb has none
+var tracks := PackedStringArray()
 
 @warning_ignore("shadowed_variable")
 func _init(beat: float, line_index: float, line_layer: float, rotation_degrees: float) -> void:
@@ -16,7 +18,13 @@ func _init(beat: float, line_index: float, line_layer: float, rotation_degrees: 
 	self.rotation = Utils.adjust_lane_rotation(rotation_degrees * (PI/180.))
 	if abs(Settings.gradual_rotation) > 1e-5:
 		self.rotation += Settings.gradual_rotation * beat
-		self.rotation += Settings.gradual_rotation * beat
+
+func _read_noodle(cd: Dictionary) -> void:
+	var bag := ObstacleInfo.new(beat, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+	ObstacleInfo._read_noodle(bag, cd)
+	if bag.noodle:
+		noodle = bag
+		tracks = bag.tracks
 
 static func new_v2(bomb_dict: Dictionary) -> BombInfo:
 	var info := BombInfo.new(
@@ -28,6 +36,7 @@ static func new_v2(bomb_dict: Dictionary) -> BombInfo:
 	var cd := Utils.get_dict(bomb_dict, "_customData", {})
 	info.interactable = cd.get("_interactable", true) != false
 	info.fake = cd.get("_fake", false) == true
+	info._read_noodle(cd)
 	return info
 
 static func new_v3(bomb_dict: Dictionary) -> BombInfo:
@@ -40,4 +49,5 @@ static func new_v3(bomb_dict: Dictionary) -> BombInfo:
 	var cd := Utils.get_dict(bomb_dict, "customData", {})
 	info.interactable = cd.get("uninteractable", false) != true
 	info.fake = cd.get("fake", false) == true
+	info._read_noodle(cd)
 	return info

@@ -5,8 +5,10 @@ class_name ChromaEnvironment
 #
 # Supported per entry: _id + _lookupMethod (Exact, Contains, StartsWith, EndsWith, Regex),
 # _active, _duplicate, _position, _localPosition, _rotation, _localRotation, _scale, _track,
-# and _geometry (Cube, Sphere, Capsule, Cylinder, Plane, Quad with a simple color).
-# Not supported: _components (lights), _lightID, _follow, animation of tracks (needs track events).
+# and _geometry (Cube, Sphere, Capsule, Cylinder, Plane, Quad, Triangle) with a material (named in the
+# difficulty's _materials table, or inline: _shader + _color). Geometry stays fixed in the world and is
+# animated by Noodle track events (update_tracks()).
+# Not supported: _components (lights), _lightID, _follow, _collision.
 #
 # Beat Saber's object names (Pillar, Mirror, clouds...) don't exist in this game's environment,
 # so unmatched ids fall back to the ALIASES table below. Edit it to point more ids at your nodes.
@@ -27,6 +29,10 @@ const ALIASES := {
 	"mirror": ["floor", "../../StandingGround"],
 }
 
+# Nodes under "Level" that get hidden when a difficulty has an "_environmentRemoval" list.
+# Edit this to taste: remove "TrackLights", for example, to keep the glowing lane edges.
+const REMOVAL_HIDES := ["rings", "DiagonalLasers", "SquareLasers", "LeftWavingLasers", "RightWavingLasers", "TrackLights", "Endpath"]
+
 var tracks := {}                   # track name -> Array of nodes (for future track events)
 var hidden_registry := {}          # the event driver's chroma_hidden dictionary (set by the game)
 var _hidden_nodes: Array[Node3D] = []
@@ -39,6 +45,18 @@ var _regex_cache := {}
 var _saved: Array = []             # [node, visible, transform] for nodes we changed
 var _saved_set := {}
 var _spawned: Array[Node] = []     # duplicates and geometry we created
+
+# false: geometry stays fixed in the world, like in Beat Saber (the Level node is under the player rig,
+# so anything added there would travel with the player)
+const GEOMETRY_FOLLOWS_PLAYER := false
+# true: "Standard" materials are lit by the scene's lights; false: flat color (safer, the game's
+# environment has few lights)
+const STANDARD_IS_LIT := false
+
+var geometry_root: Node3D = null   # set by the game: a node that is NOT under the player rig
+var _named_materials := {}         # the difficulty's _materials table
+var _material_cache := {}
+var _geo: Array = []               # geometry with its base transform and tracks, animated by update_tracks()
 
 func _init(root: Node3D) -> void:
 	_root = root
@@ -65,11 +83,30 @@ func apply(map_data: Dictionary) -> void:
 	var env: Variant = (custom as Dictionary).get("_environment", (custom as Dictionary).get("environment", null))
 	if not env is Array or (env as Array).is_empty():
 		return
+	var mats: Variant = (custom as Dictionary).get("_materials", (custom as Dictionary).get("materials", null))
+	if mats is Dictionary:
+		_named_materials = mats as Dictionary
 	_index_nodes()
 	for entry: Variant in env:
 		if entry is Dictionary:
 			_apply_entry(entry as Dictionary)
-
+# Info.dat "_environmentRemoval" (Lucy, Midnight Lady...): the map removes Beat Saber's environment
+# and builds its own out of walls. Those object names don't exist here, so when the difficulty
+# removes anything we hide this game's decorative environment instead.
+func apply_removal(difficulty_custom_data: Dictionary) -> void:
+	if _root == null:
+		return
+	var rem: Variant = difficulty_custom_data.get("_environmentRemoval", difficulty_custom_data.get("environmentRemoval", null))
+	if not rem is Array or (rem as Array).is_empty():
+		return
+	for path: String in REMOVAL_HIDES:
+		var n := _root.get_node_or_null(path)
+		if n is Node3D:
+			var n3 := n as Node3D
+			_save(n3)
+			n3.visible = false
+			hidden_registry[n3] = true      # keeps the light events from switching it back on
+			_hidden_nodes.append(n3)
 # Undo everything: delete duplicates/geometry and put changed nodes back as they were.
 func restore() -> void:
 	for n: Node in _spawned:
@@ -89,6 +126,9 @@ func restore() -> void:
 	_saved.clear()
 	_saved_set.clear()
 	tracks.clear()
+	_geo.clear()
+	_named_materials = {}
+	_material_cache.clear()
 	_match_cache.clear()
 
 func _index_nodes() -> void:
@@ -229,41 +269,160 @@ func _apply_transform(n: Node3D, e: Dictionary) -> void:
 			tracks[track_v] = []
 		(tracks[track_v] as Array).append(n)
 
+static func _make_triangle() -> ArrayMesh:
+	var verts := PackedVector3Array([Vector3(-0.5, -0.5, 0.0), Vector3(0.5, -0.5, 0.0), Vector3(0.0, 0.5, 0.0)])
+	var normals := PackedVector3Array([Vector3.BACK, Vector3.BACK, Vector3.BACK])
+	var uvs := PackedVector2Array([Vector2(0, 1), Vector2(1, 1), Vector2(0.5, 0)])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return m
+
+# Unity's primitive sizes: cube 1, sphere diameter 1, capsule and cylinder height 2 radius 0.5,
+# plane 10 x 10, quad 1 x 1.
+func _mesh_for(type_name: String) -> Mesh:
+	match type_name:
+		"Cube":
+			return BoxMesh.new()
+		"Sphere":
+			return SphereMesh.new()
+		"Capsule":
+			return CapsuleMesh.new()
+		"Cylinder":
+			return CylinderMesh.new()
+		"Plane":
+			var p := PlaneMesh.new()
+			p.size = Vector2(10.0, 10.0)
+			return p
+		"Quad":
+			return QuadMesh.new()
+		"Triangle":
+			return _make_triangle()
+	return null
+
+# Maps Chroma's shaders onto a few Godot materials. The special environment shaders (water,
+# pillars, concrete, cars, mirrors) are approximated.
+func _build_material(mat_v: Variant, flat_sided: bool) -> StandardMaterial3D:
+	var def := {}
+	if mat_v is String:
+		var named: Variant = _named_materials.get(mat_v, null)
+		if named is Dictionary:
+			def = named as Dictionary
+	elif mat_v is Dictionary:
+		def = mat_v as Dictionary
+	var shader := "Standard"
+	var sv: Variant = _g(def, "shader")
+	if sv is String:
+		shader = sv as String
+	var color := Color.WHITE
+	var c: Variant = _g(def, "color")
+	if _has3(c):
+		var arr := c as Array
+		color = Color(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]) if arr.size() > 3 else 1.0)
+	var key := "%s|%s|%s" % [shader, str(color), str(flat_sided)]
+	if _material_cache.has(key):
+		return _material_cache[key] as StandardMaterial3D
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED if flat_sided else BaseMaterial3D.CULL_BACK
+	match shader:
+		"OpaqueLight":
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		"TransparentLight":
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		"BaseWater", "BillieWater":
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			if color.a >= 1.0:
+				m.albedo_color = Color(color.r, color.g, color.b, 0.6)
+		_:
+			# "Standard" and everything else (BTSPillar, InterscopeConcrete, Obstacle, ...)
+			if not STANDARD_IS_LIT:
+				m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			if color.a < 1.0:
+				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_material_cache[key] = m
+	return m
+
 func _make_geometry(e: Dictionary, g: Dictionary) -> void:
 	if _spawned.size() >= MAX_DUPLICATES + MAX_GEOMETRY:
 		return
 	var type_v: Variant = _g(g, "type")
-	var mesh: Mesh = null
-	match String(type_v) if type_v is String else "":
-		"Cube":
-			mesh = BoxMesh.new()
-		"Sphere":
-			mesh = SphereMesh.new()
-		"Capsule":
-			mesh = CapsuleMesh.new()
-		"Cylinder":
-			mesh = CylinderMesh.new()
-		"Plane":
-			mesh = PlaneMesh.new()
-		"Quad":
-			mesh = QuadMesh.new()
+	var type_name := String(type_v) if type_v is String else ""
+	var mesh := _mesh_for(type_name)
 	if mesh == null:
 		return
-	var color := Color.WHITE
-	var mat_v: Variant = _g(g, "material")
-	if mat_v is Dictionary:
-		var c: Variant = _g(mat_v as Dictionary, "color")
-		if _has3(c):
-			var arr := c as Array
-			color = Color(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]) if arr.size() > 3 else 1.0)
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = color
-	if color.a < 1.0:
-		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var flat_sided := type_name in ["Plane", "Quad", "Triangle"]
+	var track_names := PackedStringArray()
+	var track_v: Variant = _g(e, "track")
+	if track_v is String:
+		track_names.append(track_v as String)
+	elif track_v is Array:
+		for tn: Variant in track_v:
+			if tn is String:
+				track_names.append(tn as String)
+	var material := _build_material(_g(g, "material"), flat_sided)
+	if not track_names.is_empty():
+		material = material.duplicate() as StandardMaterial3D   # a track may animate this object's color
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = material
-	_root.add_child(mi)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var parent: Node3D = _root
+	if not GEOMETRY_FOLLOWS_PLAYER and geometry_root != null:
+		parent = geometry_root
+	parent.add_child(mi)
 	_spawned.append(mi)
 	_apply_transform(mi, e)
+	if not track_names.is_empty():
+		_geo.append({
+			"n": mi,
+			"tracks": track_names,
+			"pos": mi.position,
+			"b": mi.basis.orthonormalized(),
+			"s": mi.basis.get_scale(),
+			"mat": material,
+			"color": material.albedo_color,
+		})
+
+# Called once per frame by the game (after NoodleTracks.begin_frame): moves geometry that has a _track
+# with the track's animation, exactly like Noodle objects.
+func update_tracks() -> void:
+	var trk := NoodleTracks.current
+	if trk == null or _geo.is_empty():
+		return
+	for g: Dictionary in _geo:
+		var n := g["n"] as Node3D
+		if not is_instance_valid(n):
+			continue
+		var track_names: PackedStringArray = g["tracks"]
+		var sc: Vector3 = g["s"]
+		var pos: Vector3 = g["pos"]
+		var world_b := Basis.IDENTITY
+		var local_b := Basis.IDENTITY
+		var opacity := 1.0
+		var mat := g["mat"] as StandardMaterial3D
+		var base_color: Color = g["color"]
+		var new_color := base_color
+		for tname: String in track_names:
+			var ts := trk.state(tname)
+			sc *= ts.scale
+			pos += ts.position
+			world_b = Basis(ts.rot_q) * world_b
+			local_b = local_b * Basis(ts.local_rot_q)
+			opacity *= ts.dissolve
+			if ts.has_color:
+				new_color = ts.color
+		var basis_final := (world_b * (g["b"] as Basis) * local_b).scaled_local(sc)
+		n.transform = trk.parent_transform(track_names[0]) * Transform3D(basis_final, world_b * pos)
+		n.visible = opacity > 0.01
+		if new_color != mat.albedo_color:
+			mat.albedo_color = new_color
+			if new_color.a < 1.0:
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

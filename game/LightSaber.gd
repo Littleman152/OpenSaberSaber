@@ -26,6 +26,8 @@ var second_extra_offset_rot := Vector3.ZERO
 var saber_end := Vector3.ZERO
 var saber_end_past := Vector3.ZERO
 var last_dt := 0.0
+var _saber_end_rel := Vector3.ZERO   # saber tip relative to the player rig
+var _rel_valid := false
 
 var history := Array()
 const history_size := 300
@@ -201,8 +203,21 @@ func _update_scores() -> void:
 func _physics_process(delta: float) -> void:
 	position = offset_pos + extra_offset_pos
 	rotation_degrees = offset_rot + extra_offset_rot + second_extra_offset_rot
-	saber_end_past = saber_end
+
+	# the player rig (Noodle player track) can move the whole player, and that
+	# movement must not count as swing speed
+	var rig: Node3D = null
+	if controller != null and controller.get_parent() != null:
+		rig = controller.get_parent().get_parent() as Node3D
+	if rig != null and _rel_valid:
+		saber_end_past = rig.global_transform * _saber_end_rel
+	else:
+		saber_end_past = saber_end
 	saber_end = saber_visual.tip.global_transform.origin
+	if rig != null:
+		_saber_end_rel = rig.global_transform.affine_inverse() * saber_end
+		_rel_valid = true
+
 	var time := Time.get_ticks_msec()
 	if Settings.swing_scoring:
 		_update_history(time)

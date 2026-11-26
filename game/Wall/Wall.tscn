@@ -4,8 +4,10 @@
 [ext_resource type="Script" uid="uid://c3xsgc150rk17" path="res://game/Wall/Wall.gd" id="2"]
 
 [sub_resource type="BoxMesh" id="1"]
+resource_local_to_scene = true
 
 [sub_resource type="BoxShape3D" id="2"]
+resource_local_to_scene = true
 
 [sub_resource type="Animation" id="3"]
 tracks/0/type = "value"
@@ -26,22 +28,22 @@ _data = {
 &"Spawn": SubResource("3")
 }
 
-[node name="Wall" type="Node3D" unique_id=986033880 groups=["wall"]]
+[node name="Wall" type="Node3D" unique_id=766969253 groups=["wall"]]
 script = ExtResource("2")
 
-[node name="WallMeshOrientation" type="Node3D" parent="." unique_id=1779924375]
+[node name="WallMeshOrientation" type="Node3D" parent="." unique_id=866693866]
 
-[node name="WallMesh" type="MeshInstance3D" parent="WallMeshOrientation" unique_id=742108651]
+[node name="WallMesh" type="MeshInstance3D" parent="WallMeshOrientation" unique_id=548822555]
 layers = 3
 material_override = ExtResource("1")
 mesh = SubResource("1")
 
-[node name="WallArea" type="Area3D" parent="WallMeshOrientation" unique_id=134197236 groups=["wall"]]
+[node name="WallArea" type="Area3D" parent="WallMeshOrientation" unique_id=75708296 groups=["wall"]]
 collision_mask = 20
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="WallMeshOrientation/WallArea" unique_id=1510800571]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallMeshOrientation/WallArea" unique_id=1759193257]
 shape = SubResource("2")
 
-[node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=1463239192]
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." unique_id=936770819]
 root_node = NodePath("../WallMeshOrientation")
 libraries/ = SubResource("AnimationLibrary_wf5pt")

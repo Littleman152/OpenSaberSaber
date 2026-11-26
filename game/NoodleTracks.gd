@@ -11,10 +11,11 @@ class_name NoodleTracks
 static var current: NoodleTracks = null
 
 const MAX_PARENT_DEPTH := 8
-const PROPS := {"position": 3, "rotation": 3, "localRotation": 3, "scale": 3, "dissolve": 1, "color": 4}
+const PROPS := {"position": 3, "rotation": 3, "localRotation": 3, "scale": 3, "dissolve": 1, "color": 4, "time": 1}
 const DEFAULTS := {
 	"position": Vector4(0, 0, 0, 0), "rotation": Vector4(0, 0, 0, 0), "localRotation": Vector4(0, 0, 0, 0),
-	"scale": Vector4(1, 1, 1, 0), "dissolve": Vector4(0, 0, 0, 0), "color": Vector4(1, 1, 1, 1),
+	"scale": Vector4(1, 1, 1, 0), "dissolve": Vector4(1, 0, 0, 0), "color": Vector4(1, 1, 1, 1),
+	"time": Vector4(-1, 0, 0, 0),
 }
 
 class PropEvent extends RefCounted:
@@ -24,17 +25,26 @@ class PropEvent extends RefCounted:
 	var kf: NoodleAnim.Track = null    # keyframes played over the event's duration, or null
 	var from := Vector4.ZERO           # static target: value when the event starts
 	var to := Vector4.ZERO             # static target: value when the event ends
+	var from_q := Quaternion.IDENTITY  # rotation props only: start / end as quaternions
+	var to_q := Quaternion.IDENTITY
 
 class TrackState extends RefCounted:
 	var position := Vector3.ZERO       # meters, game space
 	var rotation := Vector3.ZERO       # degrees (Beat Saber convention)
 	var local_rotation := Vector3.ZERO
+	var rot_q := Quaternion.IDENTITY          # world rotation (use this one)
+	var local_rot_q := Quaternion.IDENTITY    # local rotation (use this one)
 	var scale := Vector3.ONE
-	var dissolve := 0.0
+	var dissolve := 1.0                # Noodle "dissolve" is opacity: 1 = visible, 0 = invisible
 	var color := Color.WHITE
 	var has_color := false
+	var time := -1.0                   # Noodle "time" override (0..1 of the object's lifetime), -1 = none
 
+var _player_track := ""   # track assigned to the player (AssignPlayerToTrack)
+var _player_inv := Transform3D.IDENTITY
+var _player_inv_valid := false
 var _needed := {}      # tracks used by walls (and their parents); everything else is skipped
+var _paths := {}       # track -> Array of [time, { prop -> NoodleAnim.Track }] sorted by time (AssignPathAnimation)
 var _events := {}      # track -> { prop -> Array[PropEvent] sorted by time }
 var _parents := {}     # child track -> Array of [time, parent track] sorted by time
 var _frame_beat := 0.0
@@ -60,9 +70,8 @@ static func _load_in_thread(map_data: Dictionary, needed: Dictionary) -> void:
 	var t := NoodleTracks.new()
 	t._needed = needed
 	t._load(map_data)
-	if not t._events.is_empty() or not t._parents.is_empty():
+	if not t._events.is_empty() or not t._parents.is_empty() or not t._paths.is_empty():
 		current = t
-	print("[TRACKS] loaded in ", Time.get_ticks_msec() - t0, " ms: animated tracks=", t._events.size(), " tracks with a parent=", t._parents.size())   # DEBUG, remove later
 
 # Tracks used by walls, plus every track that is a parent of one of them (directly or not).
 static func _collect_needed(map_data: Dictionary) -> Dictionary:
@@ -71,8 +80,14 @@ static func _collect_needed(map_data: Dictionary) -> Dictionary:
 		if o != null:
 			for tn: String in o.tracks:
 				needed[tn] = true
-	if needed.is_empty():
-		return needed
+	for b: BombInfo in Map.bomb_stack:
+		if b != null:
+			for tn: String in b.tracks:
+				needed[tn] = true
+	for n: ColorNoteInfo in Map.note_stack:
+		if n != null:
+			for tn: String in n.tracks:
+				needed[tn] = true
 	var custom: Variant = map_data.get("_customData", map_data.get("customData", null))
 	if not custom is Dictionary:
 		return needed
@@ -80,6 +95,15 @@ static func _collect_needed(map_data: Dictionary) -> Dictionary:
 	if not raw is Array:
 		return needed
 	var links: Array = []   # [children, parent]
+	for pe: Variant in raw:
+		if pe is Dictionary:
+			var pe_type: Variant = _ev(pe as Dictionary, "_type", "t")
+			if pe_type is String and String(pe_type) == "AssignPlayerToTrack":
+				var pe_data: Variant = _ev(pe as Dictionary, "_data", "d")
+				if pe_data is Dictionary:
+					var pe_track: Variant = _ev(pe_data as Dictionary, "_track", "track")
+					if pe_track is String:
+						needed[String(pe_track)] = true
 	for e: Variant in raw:
 		if not e is Dictionary:
 			continue
@@ -144,6 +168,12 @@ func _load(map_data: Dictionary) -> void:
 				_add_animate(time, data_v as Dictionary)
 			"AssignTrackParent":
 				_add_parent(time, data_v as Dictionary)
+			"AssignPathAnimation":
+				_add_path(time, data_v as Dictionary)
+			"AssignPlayerToTrack":
+				var pt: Variant = _ev(data_v as Dictionary, "_track", "track")
+				if pt is String:
+					_player_track = String(pt)
 
 func _add_animate(time: float, d: Dictionary) -> void:
 	var tracks := PackedStringArray()
@@ -184,12 +214,54 @@ func _add_prop_event(track: String, prop: String, comps: int, raw: Variant, time
 			vec[c] = float(arr[c])
 		ev.to = vec
 		ev.from = _value_at(track, prop, time)   # earlier events are already stored
+		if prop == "rotation" or prop == "localRotation":
+			ev.to_q = NoodleAnim.euler_to_quat(Vector3(vec.x, vec.y, vec.z))
+			ev.from_q = _rot_at(track, prop, time)
 	if not _events.has(track):
 		_events[track] = {}
 	var props: Dictionary = _events[track]
 	if not props.has(prop):
 		props[prop] = []
 	(props[prop] as Array).append(ev)
+
+const PATH_PROPS := {
+	"_position": ["position", 3], "_rotation": ["rotation", 3], "_localRotation": ["local_rotation", 3],
+	"_scale": ["scale", 3], "_dissolve": ["dissolve", 1], "_color": ["color", 4], "_definitePosition": ["def_pos", 3],
+}
+
+# AssignPathAnimation: from this time on, objects spawned in these tracks use this animation
+# over their lifetime (instead of / on top of their own _animation). _duration blending is ignored.
+func _add_path(time: float, d: Dictionary) -> void:
+	var props := {}
+	for key: String in PATH_PROPS:
+		var val: Variant = _ev(d, key, key.substr(1))
+		if val == null:
+			continue
+		var spec: Array = PATH_PROPS[key]
+		var tr := NoodleAnim.parse(val, int(spec[1]))
+		if tr != null:
+			props[spec[0]] = tr
+	if props.is_empty():
+		return
+	for track: String in _names(_ev(d, "_track", "track")):
+		if not _needed.has(track):
+			continue
+		if not _paths.has(track):
+			_paths[track] = []
+		(_paths[track] as Array).append([time, props])
+
+# The animation properties that apply to an object of this track spawned at this beat.
+func path_animation(track: String, beat: float) -> Dictionary:
+	var result := {}
+	if not _paths.has(track):
+		return result
+	for entry: Array in _paths[track]:
+		if float(entry[0]) > beat:
+			break
+		var props: Dictionary = entry[1]
+		for k: String in props:
+			result[k] = props[k]
+	return result
 
 func _add_parent(time: float, d: Dictionary) -> void:
 	var parent_v: Variant = _ev(d, "_parentTrack", "parentTrack")
@@ -236,10 +308,29 @@ func _value_at(track: String, prop: String, b: float) -> Vector4:
 		return NoodleAnim.sample(ev.kf, eased)
 	return ev.from.lerp(ev.to, eased)
 
+# Rotation of a track at a beat, blended as quaternions (shortest arc), see NoodleAnim.sample_rotation
+func _rot_at(track: String, prop: String, b: float) -> Quaternion:
+	if not _events.has(track):
+		return Quaternion.IDENTITY
+	var props: Dictionary = _events[track]
+	if not props.has(prop):
+		return Quaternion.IDENTITY
+	var list: Array = props[prop]
+	var idx := _last_index(list, b)
+	if idx < 0:
+		return Quaternion.IDENTITY
+	var ev := list[idx] as PropEvent
+	var t := 1.0 if ev.duration <= 0.0 else clampf((b - ev.time) / ev.duration, 0.0, 1.0)
+	var eased := NoodleAnim._ease(ev.easing, t)
+	if ev.kf != null:
+		return NoodleAnim.sample_rotation(ev.kf, eased)
+	return ev.from_q.slerp(ev.to_q, eased)
+
 func begin_frame(beat: float) -> void:
 	_frame_beat = beat
 	_state_cache.clear()
 	_parent_cache.clear()
+	_player_inv_valid = false
 
 func has_track(track: String) -> bool:
 	return _events.has(track) or _parents.has(track)
@@ -260,11 +351,9 @@ func state(track: String) -> TrackState:
 			var p := _value_at(track, "position", _frame_beat)
 			s.position = Vector3(p.x * unit.x, p.y * unit.y, -p.z * unit.z)
 		if props.has("rotation"):
-			var r := _value_at(track, "rotation", _frame_beat)
-			s.rotation = Vector3(r.x, r.y, r.z)
+			s.rot_q = _rot_at(track, "rotation", _frame_beat)
 		if props.has("localRotation"):
-			var lr := _value_at(track, "localRotation", _frame_beat)
-			s.local_rotation = Vector3(lr.x, lr.y, lr.z)
+			s.local_rot_q = _rot_at(track, "localRotation", _frame_beat)
 		if props.has("scale"):
 			var sc := _value_at(track, "scale", _frame_beat)
 			s.scale = Vector3(sc.x, sc.y, sc.z)
@@ -274,13 +363,15 @@ func state(track: String) -> TrackState:
 			var c := _value_at(track, "color", _frame_beat)
 			s.color = Color(c.x, c.y, c.z, c.w)
 			s.has_color = true
+		if props.has("time"):
+			s.time = _value_at(track, "time", _frame_beat).x
 	_state_cache[track] = s
 	return s
 
 # This track's own transform, used when it acts as a parent for other tracks.
 func track_transform(track: String) -> Transform3D:
 	var s := state(track)
-	var b := euler_basis(s.rotation) * euler_basis(s.local_rotation)
+	var b := Basis(s.rot_q * s.local_rot_q)
 	var sc := Vector3(maxf(s.scale.x, 0.0001), maxf(s.scale.y, 0.0001), maxf(s.scale.z, 0.0001))
 	return Transform3D(b.scaled_local(sc), s.position)
 
@@ -294,6 +385,28 @@ func _parent_at(track: String, b: float) -> String:
 			break
 	return result
 
+# The player track moves the player, so everything else has to move the opposite way.
+# Walls under a track that mirrors the player (like "note" in Somewhere Out There) cancel out.
+const MOVE_PLAYER := true   # true: the player rig moves. false: the old way, everything moves the opposite way
+
+# The player track's transform. The player rig in BeepSaber_Game uses this.
+const PLAYER_MOVE_SCALE := 1.0   # multiplies how far the player track moves the player (1.0 = exactly as mapped)
+
+func player_transform() -> Transform3D:
+	if _player_track == "":
+		return Transform3D.IDENTITY
+	var t := parent_transform(_player_track) * track_transform(_player_track)
+	t.origin *= PLAYER_MOVE_SCALE
+	return t
+
+# Used by walls, bombs and notes. With MOVE_PLAYER the rig moves instead, so this is identity.
+func player_inverse() -> Transform3D:
+	if MOVE_PLAYER or _player_track == "":
+		return Transform3D.IDENTITY
+	if not _player_inv_valid:
+		_player_inv = (parent_transform(_player_track) * track_transform(_player_track)).affine_inverse()
+		_player_inv_valid = true
+	return _player_inv
 # Transform contributed by the parent chain of a track (identity if it has no parent).
 func parent_transform(track: String, depth := 0) -> Transform3D:
 	if _parent_cache.has(track):
@@ -305,18 +418,3 @@ func parent_transform(track: String, depth := 0) -> Transform3D:
 			result = parent_transform(p, depth + 1) * track_transform(p)
 	_parent_cache[track] = result
 	return result
-
-# DEBUG, remove later: one line describing a track and its parent chain at the current frame
-func describe(track: String) -> String:
-	var out := ""
-	var nm := track
-	for i in MAX_PARENT_DEPTH:
-		var s := state(nm)
-		out += "%s(pos=%s scale=%s) <- " % [nm, s.position, s.scale]
-		var p := ""
-		if _parents.has(nm):
-			p = _parent_at(nm, _frame_beat)
-		if p == "":
-			break
-		nm = p
-	return out
