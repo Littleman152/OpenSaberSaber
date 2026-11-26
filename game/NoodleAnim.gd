@@ -15,6 +15,7 @@ class Track extends RefCounted:
 	var times := PackedFloat32Array()
 	var values: Array[Vector4] = []
 	var easings := PackedInt32Array()
+	var quats: Array[Quaternion] = []     # rotation keyframes as quaternions (built when first sampled)
 
 const E_SPLINE := 1
 
@@ -52,6 +53,8 @@ const EASE_IDS := {
 	"easeInSine": 50, "easeOutSine": 51, "easeInOutSine": 52,
 	"easeInExpo": 60, "easeOutExpo": 61, "easeInOutExpo": 62,
 	"easeOutElastic": 71, "easeOutBack": 81,
+	"easeInCirc": 90, "easeOutCirc": 91, "easeInOutCirc": 92,
+	"easeStep": 100,
 }
 
 # comps = number of value components (3 for vectors, 4 for colors, 1 for floats).
@@ -98,6 +101,36 @@ static func sample(tr: Track, t: float) -> Vector4:
 		var p3 := tr.values[mini(i + 2, n - 1)]
 		return _catmull(p0, tr.values[i], tr.values[i + 1], p3, f)
 	return tr.values[i].lerp(tr.values[i + 1], _ease(e, f))
+
+# Euler degrees (Beat Saber convention, ZXY order) -> quaternion in game space
+static func euler_to_quat(deg: Vector3) -> Quaternion:
+	return Quaternion(Basis.from_euler(Vector3(deg_to_rad(-deg.x), deg_to_rad(-deg.y), deg_to_rad(deg.z)), EULER_ORDER_YXZ))
+
+static func _kf_quat(tr: Track, i: int) -> Quaternion:
+	if tr.quats.size() != tr.count:
+		tr.quats.clear()
+		for v: Vector4 in tr.values:
+			tr.quats.append(euler_to_quat(Vector3(v.x, v.y, v.z)))
+	return tr.quats[i]
+
+# Rotations are blended like Noodle does: as quaternions along the SHORTEST arc, not per Euler angle.
+# So a keyframe list like 0, 90, 180, 270, 0 keeps turning in the same direction instead of
+# swinging back, and -360 to 0 means no turn at all. splineCatmullRom segments still use the Euler values.
+static func sample_rotation(tr: Track, t: float) -> Quaternion:
+	var n := tr.count
+	if n == 1 or t <= tr.times[0]:
+		return _kf_quat(tr, 0)
+	if t >= tr.times[n - 1]:
+		return _kf_quat(tr, n - 1)
+	var i := 0
+	while i < n - 2 and t >= tr.times[i + 1]:
+		i += 1
+	var f := (t - tr.times[i]) / maxf(tr.times[i + 1] - tr.times[i], 0.00001)
+	var e := tr.easings[i + 1]
+	if e == E_SPLINE:
+		var v := _catmull(tr.values[maxi(i - 1, 0)], tr.values[i], tr.values[i + 1], tr.values[mini(i + 2, n - 1)], f)
+		return euler_to_quat(Vector3(v.x, v.y, v.z))
+	return _kf_quat(tr, i).slerp(_kf_quat(tr, i + 1), _ease(e, f))
 
 static func _catmull(p0: Vector4, p1: Vector4, p2: Vector4, p3: Vector4, t: float) -> Vector4:
 	var t2 := t * t
@@ -154,4 +187,17 @@ static func _ease(e: int, x: float) -> float:
 			var c1 := 1.70158
 			var c3 := c1 + 1.0
 			return 1.0 + c3 * pow(x - 1.0, 3.0) + c1 * pow(x - 1.0, 2.0)
+		9:
+			match kind:
+				0:
+					return 1.0 - sqrt(maxf(1.0 - x * x, 0.0))
+				1:
+					return sqrt(maxf(1.0 - (x - 1.0) * (x - 1.0), 0.0))
+				_:
+					if x < 0.5:
+						return (1.0 - sqrt(maxf(1.0 - 4.0 * x * x, 0.0))) / 2.0
+					return (sqrt(maxf(1.0 - pow(-2.0 * x + 2.0, 2.0), 0.0)) + 1.0) / 2.0
+		10:
+			return floorf(x)   # easeStep: holds the old value, jumps at the end of the segment
+	return x
 	return x
