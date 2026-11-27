@@ -25,6 +25,14 @@ var arc_head = false
 var arc_tail = false
 var chain_head = false
 var counts_for_score := true
+
+# Noodle: notes with Noodle data are placed by NoodleMotion every frame instead of flying straight
+var _nm: NoodleMotion = null
+var _cur_color := Color.WHITE
+var _coll_on := false
+var _last_dissolve := -1.0
+var _last_arrow := -1.0
+var _last_color := Color(-1, -1, -1)
 func _ready() -> void:
 	_mat = mi.material_override as ShaderMaterial
 	_mesh = mi.mesh
@@ -42,7 +50,11 @@ func spawn(note_info: ColorNoteInfo, current_beat: float) -> void:
 	# can behave weirdly (ex. AnimationPlayer won't always play correctly)
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	
+	_nm = null
 	var color := Map.color_left if note_info.color == 0 else Map.color_right
+	if note_info.noodle != null and note_info.noodle.nd_has_color:
+		color = note_info.noodle.nd_color
+	_cur_color = color
 	speed = Constants.BEAT_DISTANCE * Map.current_info.beats_per_minute * 0.016666666666666667
 	beat = note_info.beat
 	which_saber = note_info.color
@@ -93,6 +105,10 @@ func spawn(note_info: ColorNoteInfo, current_beat: float) -> void:
 	var anim_speed := Map.current_difficulty.note_jump_movement_speed / 9.0
 	anim.speed_scale = maxf(min_speed,anim_speed)
 	anim.play(&"Spawn")
+	if note_info.noodle != null:
+		# Noodle notes skip the spawn animation: jump to its end state
+		anim.seek(anim.current_animation_length, true)
+		anim.stop(true)
 	
 	slice_particles.reset()
 	mi.visible = true
@@ -103,6 +119,67 @@ func spawn(note_info: ColorNoteInfo, current_beat: float) -> void:
 	# fake / uninteractable notes only show their arrow or dot
 	_mat.set_shader_parameter(&"glyph_only", not counts_for_score)
 	_mat.set_shader_parameter(&"dissolve", 0.0)
+	_mat.set_shader_parameter(&"dissolve_arrow", 0.0)
+	# the shader's own spawn dissolve works on world z, Noodle notes fade in through NoodleMotion instead
+	_mat.set_shader_parameter(&"spawn_dissolve_length", 0.0 if note_info.noodle != null else 6.0)
+	_last_dissolve = 0.0
+	_last_arrow = 0.0
+	_last_color = color
+	_coll_on = false
+	if note_info.noodle != null:
+		_setup_noodle(note_info, current_beat)
+
+func _setup_noodle(note_info: ColorNoteInfo, current_beat: float) -> void:
+	lane_rotation = note_info.rotation
+	_nm = NoodleMotion.new()
+	var lane_xy := Vector2(
+		Settings.LANE_DISTANCE_X * float(note_info.line_index) + Settings.LANE_ZERO_X,
+		Constants.LANE_DISTANCE_Y * float(note_info.line_layer) + Constants.LAYER_ZERO_Y)
+	_nm.setup(note_info.noodle, note_info.beat, current_beat, note_info.rotation, lane_xy, note_info.cut_angle, Map.get_speed_scale(note_info.beat))
+	_nm.scale_mul = Vector3.ONE * (Settings.block_size / 100.0)
+	mi.visible = false   # hidden until NoodleMotion says it is alive
+	set_collision_disabled(true)   # switched on by _physics_process when the note is within reach
+
+func _physics_process(delta: float) -> void:
+	if _nm == null:
+		super(delta)
+		return
+	if Scoreboard.paused or not Map.current_info:
+		return
+	if not _nm.update():
+		hide_cube()
+		release()
+		return
+	if not _nm.visible:
+		mi.visible = false
+		return
+	transform = _nm.xf
+	mi.visible = _nm.opacity > 0.004
+	_apply_noodle_visuals()
+
+	if counts_for_score:
+		# time based reach / miss window (a straight flight can't be assumed any more)
+		var rel := _nm.beat_now - beat   # beats until (<0) / since (>0) the note reaches the player
+		var reachable := mi.visible and rel > -(3.0 / Constants.BEAT_DISTANCE)
+		if reachable != _coll_on:
+			_coll_on = reachable
+			set_collision_disabled(not reachable)
+		if rel > Constants.MISS_Z / Constants.BEAT_DISTANCE:
+			on_miss()
+
+func _apply_noodle_visuals() -> void:
+	var d := 1.0 - _nm.opacity
+	if not is_equal_approx(d, _last_dissolve):
+		_last_dissolve = d
+		_mat.set_shader_parameter(&"dissolve", d)
+	var a := 1.0 - _nm.arrow_opacity
+	if not is_equal_approx(a, _last_arrow):
+		_last_arrow = a
+		_mat.set_shader_parameter(&"dissolve_arrow", a)
+	if _nm.has_color and _nm.color != _last_color:
+		_last_color = _nm.color
+		_cur_color = _nm.color
+		_mat.set_shader_parameter(&"color", _nm.color)
 
 # call this when clearing the track
 func clear_from_track() -> void:
@@ -113,6 +190,7 @@ func clear_from_track() -> void:
 		release()
 
 func hide_cube() -> void:
+	_nm = null
 	mi.visible = false
 	set_collision_disabled(true)
 	# disable processing on this node and all children to help with performance
@@ -158,7 +236,10 @@ func cut(saber: LightSaber, cut_speed: Vector3, cut_plane: Plane, controller: Be
 		var travel_distance_factor := controller.movement_aabb.get_longest_axis_size()
 		travel_distance_factor = clampf((travel_distance_factor-0.5)/0.5, 0.0, 1.0)
 		# allows a bit of save margin where the beat is considered 100% correct
-		var beat_accuracy := clampf((1.0 - absf(global_transform.origin.z)) / 0.5, 0.0, 1.0)
+		var dz := global_transform.origin.z
+		if _nm != null:
+			dz = (_nm.beat_now - beat) * Constants.BEAT_DISTANCE   # Noodle notes don't sit on a straight line
+		var beat_accuracy := clampf((1.0 - absf(dz)) / 0.5, 0.0, 1.0)
 		Scoreboard.note_cut(saber, transform.origin, lane_rotation, beat_accuracy, cut_angle_accuracy, cut_distance_accuracy, travel_distance_factor, arc_head, arc_tail, chain_head)
 		cutted.emit(true)
 	else:
@@ -178,6 +259,8 @@ func cut(saber: LightSaber, cut_speed: Vector3, cut_plane: Plane, controller: Be
 # cut the cube by creating two rigid bodies and using a CSGBox to create
 # the cut plane
 func _start_cut_pieces(cutplane: Plane) -> void:
+	piece_left.set_color(_cur_color, is_dot)   # Noodle may have animated the color since spawn
+	piece_right.set_color(_cur_color, is_dot)
 	piece_left.scale = Vector3(Settings.block_size,Settings.block_size,Settings.block_size)/100.
 	piece_right.scale = Vector3(Settings.block_size,Settings.block_size,Settings.block_size)/100.
 	piece_left.global_transform = global_transform
