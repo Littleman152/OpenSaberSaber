@@ -22,6 +22,9 @@ class BeatSaverSongInfo extends RefCounted:
 		level_author_name = Utils.get_str(metadata, "levelAuthorName", "")
 		duration = Utils.get_float(metadata, "duration", 0.0)
 
+# current BeatSaver API (the old beatsaver.com/api/... endpoints are deprecated)
+const API := "https://api.beatsaver.com"
+
 var song_data: Array[BeatSaverSongInfo] = []
 var current_list := 0
 # reference to the main main node (used for playing downloadable song previews)
@@ -30,12 +33,28 @@ var current_list := 0
 # not requestable (ie. reached end of the list)
 var prev_page_available := -1
 var next_page_available := -1
-# Older API used to support more lists. temporarily limiting to ones that still work
-#var list_modes = ["hot","rating","latest","downloads","plays"]
-var list_modes: Array[String] = ["plays"]
+# sort orders for the search endpoint, cycled with the mode button.
+# "Latest", "Rating" and "Relevance" are known good; remove "Curated" if the API rejects it
+var list_modes: Array[String] = ["Latest", "Rating", "Relevance", "Curated"]
 var search_word := ""
 var item_selected := -1
 var downloading := []#[["name","version_info"]]
+
+# Search filters. A settings window should write into this via apply_filters().
+# For noodle/me/chroma/cinema/ranked/curated/verified: true = ONLY maps with that property,
+# false = no filtering. automapper: true = include AI maps (they are excluded by default).
+# min_rating is 0.0 to 1.0 (0.0 = no minimum).
+var filters := {
+	"noodle": false,
+	"me": false,
+	"chroma": false,
+	"cinema": false,
+	"ranked": false,
+	"curated": false,
+	"verified": false,
+	"automapper": false,
+	"min_rating": 0.0,
+}
 
 @onready var item_list := $ItemList as ItemList
 @onready var mode_button := $mode as Button
@@ -66,6 +85,7 @@ func on_song_list_changed() -> void:
 		item_list.set_item_disabled(item_index,main_menu_ref.all_song_hashes.has(item_list.get_item_metadata(item_index)))
 
 func _ready() -> void:
+	_setup_filter_ui()
 	UI_AudioEngine.attach_children(self)
 	($back as Button).visible = false
 	v_scroll.value_changed.connect(_on_ListV_Scroll_value_changed)
@@ -116,6 +136,82 @@ func _show() -> void:
 		self.visible = true
 	_on_BeatSaverPanel_visibility_changed()
 
+# Build a search URL for the current BeatSaver API.
+# An empty query with a sort order gives a plain browsing list.
+func _search_url(page: int, query: String, sort: String) -> String:
+	var params := PackedStringArray(["sortOrder=" + sort])
+	if query != "":
+		params.append("q=" + query.uri_encode())
+	for key: String in ["noodle", "me", "chroma", "cinema", "ranked", "curated", "verified", "automapper"]:
+		if filters.get(key, false):
+			params.append(key + "=true")
+	var min_rating: float = filters.get("min_rating", 0.0)
+	if min_rating > 0.0:
+		params.append("minRating=%s" % min_rating)
+	return "%s/search/text/%d?%s" % [API, page, "&".join(params)]
+
+# Called by the filter settings window: merges the new values and reloads the current list from page 0.
+func apply_filters(new_filters: Dictionary) -> void:
+	filters.merge(new_filters, true)
+	_update_filters_button_text()
+	if prev_request == null:
+		# panel not opened yet; the first request will use the new filters
+		return
+	var req := BeatSaverRequest.new()
+	req.page = 0
+	req.type = prev_request.type
+	req.data = prev_request.data
+	prev_request = req
+	update_list(prev_request)
+
+var filter_panel: BeatSaverFilterPanel
+var filters_button: Button
+
+# Creates the "Filters" button and the filter window in code (no scene changes needed).
+# If the button overlaps something, move it in _setup_filter_ui or add your own
+# button in the scene and connect its button_up signal to toggle_filters().
+func _setup_filter_ui() -> void:
+	filters_button = Button.new()
+	filters_button.anchor_left = 1.0
+	filters_button.anchor_right = 1.0
+	filters_button.anchor_top = 0.0
+	filters_button.anchor_bottom = 0.0
+	filters_button.offset_left = -130.0
+	filters_button.offset_right = -10.0
+	filters_button.offset_top = 10.0
+	filters_button.offset_bottom = 50.0
+	filters_button.button_up.connect(toggle_filters)
+	add_child(filters_button)
+	_update_filters_button_text()
+
+	# added after the button so the window covers it while open
+	filter_panel = BeatSaverFilterPanel.new()
+	add_child(filter_panel)
+	filter_panel.filters_applied.connect(apply_filters)
+	filter_panel.closed.connect(_refresh_canvas)
+
+func toggle_filters() -> void:
+	filter_panel.load_from(filters)
+	filter_panel.visible = not filter_panel.visible
+	_refresh_canvas()
+
+func _update_filters_button_text() -> void:
+	if filters_button == null:
+		return
+	var active := 0
+	for key: String in filters:
+		if key == "min_rating":
+			if float(filters[key]) > 0.0: active += 1
+		elif filters[key]:
+			active += 1
+	filters_button.text = "Filters (%d)" % active if active > 0 else "Filters"
+
+# the OQ UI canvas only redraws on input updates, so poke it after UI changes
+func _refresh_canvas() -> void:
+	var canvas := get_parent().get_parent()
+	if canvas is OQ_UI2DCanvas:
+		(canvas as OQ_UI2DCanvas)._input_update()
+
 func update_list(req: BeatSaverRequest) -> void:
 	mode_button.disabled = true
 	if req.page == 0:
@@ -125,6 +221,8 @@ func update_list(req: BeatSaverRequest) -> void:
 			goto_maps_by.visible = false
 		song_data = []
 		item_selected = -1
+		# a cancelled in-flight page request never completes, so don't stay blocked on it
+		_scroll_page_request_pending = false
 	if not httpcoverdownload:
 		return
 	httpcoverdownload.cancel_request()
@@ -134,17 +232,14 @@ func update_list(req: BeatSaverRequest) -> void:
 	
 	match req.type:
 		"list":
-			var list := req.data
-			mode_button.text = list.substr(0,1).capitalize() + list.substr(1)
-			httpreq.request("https://beatsaver.com/api/maps/%s/%s" % [list,req.page])
+			mode_button.text = req.data
+			httpreq.request(_search_url(req.page, "", req.data))
 		"text_search":
-			var search_text := req.data
-			mode_button.text = search_text
-			httpreq.request("https://beatsaver.com/api/search/text/%s?q=%s&sortOrder=Relevance&automapper=true" % [req.page,search_text.uri_encode()])
+			mode_button.text = req.data
+			httpreq.request(_search_url(req.page, req.data, "Relevance"))
 		"uploader":
-			var uploader_id := req.data
 			mode_button.text = "Uploader"
-			httpreq.request("https://beatsaver.com/api/maps/uploader/%s/%s" % [uploader_id,req.page])
+			httpreq.request("%s/maps/uploader/%s/%s" % [API, req.data, req.page])
 		_:
 			vr.log_warning("Unsupported request type '%s'" % req.type)
 
@@ -160,31 +255,28 @@ func _get_selected_song() -> BeatSaverSongInfo:
 		return song_data[item_selected]
 	return null
 
-func _on_HTTPRequest_request_completed(result: int, _response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	if result == 0:
+func _on_HTTPRequest_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
 		var json_data: Variant = JSON.parse_string(body.get_string_from_utf8())
-		if json_data is Dictionary:
-			var json_dict := json_data as Dictionary
-			next_page_available = prev_page_available + 1
-			
-			if json_dict.has("docs"):
-				var docs: Variant = json_dict["docs"]
-				if docs is Array:
-					var docs_array := docs as Array
-					_current_cover_to_download = song_data.size()
-					for i: Variant in docs_array:
-						if not i is Dictionary: continue
-						var parsed_song := BeatSaverSongInfo.new(i as Dictionary)
-						var index := item_list.add_item(parsed_song.name)
-						item_list.set_item_icon(index, placeholder_cover)
-						var tooltip := "Map author: %s" % parsed_song.level_author_name
-						item_list.set_item_tooltip(index, tooltip)
-						song_data.append(parsed_song)
-						item_list.set_item_disabled(index, main_menu_ref.all_song_hashes.has(parsed_song.versions[0]["hash"]))
-						item_list.set_item_metadata(index, parsed_song.versions[0]["hash"])
-
+		if json_data is Dictionary and (json_data as Dictionary).get("docs") is Array:
+			var docs_array := (json_data as Dictionary)["docs"] as Array
+			# an empty page means we reached the end of the list
+			next_page_available = prev_page_available + 1 if not docs_array.is_empty() else -1
+			_current_cover_to_download = song_data.size()
+			for i: Variant in docs_array:
+				if not i is Dictionary: continue
+				var parsed_song := BeatSaverSongInfo.new(i as Dictionary)
+				# skip maps without any downloadable version
+				if parsed_song.versions.is_empty(): continue
+				var index := item_list.add_item(parsed_song.name)
+				item_list.set_item_icon(index, placeholder_cover)
+				var tooltip := "Map author: %s" % parsed_song.level_author_name
+				item_list.set_item_tooltip(index, tooltip)
+				song_data.append(parsed_song)
+				item_list.set_item_disabled(index, main_menu_ref.all_song_hashes.has(parsed_song.versions[0]["hash"]))
+				item_list.set_item_metadata(index, parsed_song.versions[0]["hash"])
 	else:
-		vr.log_error("request error "+str(result))
+		vr.log_error("request error %d (HTTP %d)" % [result, response_code])
 	mode_button.disabled = false
 	($back as Button).visible = back_stack.size() > 0
 	_scroll_page_request_pending = false
@@ -198,7 +290,7 @@ func _on_HTTPRequest_request_completed(result: int, _response_code: int, _header
 func _on_mode_button_up() -> void:
 	current_list += 1
 	current_list %= list_modes.size()
-	mode_button.text = list_modes[current_list].capitalize()
+	mode_button.text = list_modes[current_list]
 	_add_to_back_stack(prev_request)
 	prev_request = BeatSaverRequest.new()
 	prev_request.page = 0
@@ -440,11 +532,11 @@ func _on_CloseButton_pressed() -> void:
 var _is_first_show := true
 func _on_BeatSaverPanel_visibility_changed() -> void:
 	if _is_first_show:
-		# populate initial list of songs with most played on BeatSaver
+		# populate initial list with the latest maps on BeatSaver
 		var first_req := BeatSaverRequest.new()
 		first_req.page = 0
 		first_req.type = "list"
-		first_req.data = "plays"
+		first_req.data = list_modes[0]
 		prev_request = first_req
 		update_list(prev_request)
 		_is_first_show = false
