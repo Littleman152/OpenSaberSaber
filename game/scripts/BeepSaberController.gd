@@ -62,10 +62,10 @@ func _update_buttons_and_sticks() -> void:
 	menu = is_button_pressed(&"menu_button")
 
 func _update_movement_aabb() -> void:
-	movement_aabb = movement_aabb.expand(global_transform.origin)
+	movement_aabb = movement_aabb.expand(position)
 
 func reset_movement_aabb() -> void:
-	movement_aabb = AABB(global_transform.origin, Vector3.ZERO)
+	movement_aabb = AABB(position, Vector3.ZERO)
 
 var _is_simple_rumbling := false
 var _rumble_duration_remaining := 0.0
